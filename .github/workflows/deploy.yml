@@ -102,20 +102,18 @@ jobs:
         shell: bash
         env:
           TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
+          CONFIGURED_COMPARTMENT_OCID: ${{ vars.OCI_COMPARTMENT_OCID }}
         run: |
           set -Eeuo pipefail
-          COMPARTMENT_OCID="$(
-            oci iam compartment list \
-              --compartment-id "$TENANCY_OCID" \
-              --compartment-id-in-subtree true \
-              --access-level ACCESSIBLE \
-              --all \
-              --output json |
-            jq -r '.data[] | select(.name == "NituWAGateway" and .["lifecycle-state"] == "ACTIVE") | .id' |
-            head -n 1
-          )"
-          if [[ ! "$COMPARTMENT_OCID" =~ ^ocid1\.compartment\. ]]; then
-            echo "Unable to find the active NituWAGateway compartment." >&2
+          if [[ "$CONFIGURED_COMPARTMENT_OCID" =~ ^ocid1\.compartment\. ]]; then
+            COMPARTMENT_OCID="$CONFIGURED_COMPARTMENT_OCID"
+            echo "Using configured OCI compartment."
+          else
+            COMPARTMENT_OCID="$TENANCY_OCID"
+            echo "No valid compartment OCID is configured; using the tenancy root compartment."
+          fi
+          if [[ ! "$COMPARTMENT_OCID" =~ ^ocid1\.(compartment|tenancy)\. ]]; then
+            echo "Unable to resolve a valid Oracle compartment or tenancy OCID." >&2
             exit 1
           fi
           NAMESPACE="$(oci os ns get --query data --raw-output)"
@@ -126,7 +124,6 @@ jobs:
           echo "TF_VAR_compartment_ocid=$COMPARTMENT_OCID" >> "$GITHUB_ENV"
           echo "OCI_RESOLVED_COMPARTMENT_OCID=$COMPARTMENT_OCID" >> "$GITHUB_ENV"
           echo "OCI_RESOLVED_NAMESPACE=$NAMESPACE" >> "$GITHUB_ENV"
-          echo "Resolved the NituWAGateway compartment and Object Storage namespace."
       - name: Create or secure Terraform state bucket
         shell: bash
         env:
