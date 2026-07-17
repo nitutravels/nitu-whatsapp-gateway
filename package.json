@@ -1,0 +1,27 @@
+{
+  "name": "nitu-whatsapp-gateway",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Self-hosted WhatsApp linked-device gateway for operational messaging",
+  "main": "src/server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/server.js",
+    "check": "node --check src/server.js && node --check src/gateway.js && node --check src/db.js && node --check src/routes.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@fastify/helmet": "13.1.0",
+    "@fastify/rate-limit": "11.1.0",
+    "@fastify/static": "10.1.0",
+    "better-sqlite3": "12.11.1",
+    "fastify": "5.10.0",
+    "pino": "10.3.1",
+    "qrcode": "1.5.4",
+    "whatsapp-web.js": "1.34.7",
+    "zod": "4.4.3"
+  }
+}

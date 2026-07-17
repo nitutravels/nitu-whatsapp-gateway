@@ -1,0 +1,58 @@
+services:
+  gateway:
+    image: ${GATEWAY_IMAGE}
+    container_name: nitu-wa-gateway
+    restart: unless-stopped
+    init: true
+    shm_size: "1gb"
+    environment:
+      PORT: "3000"
+      DATA_DIR: /data
+      API_KEY: ${API_KEY}
+      ADMIN_TOKEN: ${ADMIN_TOKEN}
+      WEBHOOK_URL: ${WEBHOOK_URL:-}
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET}
+      DEFAULT_COUNTRY_CODE: ${DEFAULT_COUNTRY_CODE:-91}
+      SEND_INTERVAL_MS: ${SEND_INTERVAL_MS:-6000}
+      MAX_ATTEMPTS: ${MAX_ATTEMPTS:-3}
+      MEDIA_ALLOWED_HOSTS: ${MEDIA_ALLOWED_HOSTS:-}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      CHROME_PATH: /usr/bin/chromium
+    volumes:
+      - ./data:/data
+    networks:
+      - gateway_net
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  caddy:
+    image: caddy:2.11.1-alpine
+    container_name: nitu-wa-caddy
+    restart: unless-stopped
+    depends_on:
+      - gateway
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - gateway_net
+    security_opt:
+      - no-new-privileges:true
+
+networks:
+  gateway_net:
+    driver: bridge
+
+volumes:
+  caddy_data:
+  caddy_config:
