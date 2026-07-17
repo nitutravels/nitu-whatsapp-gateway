@@ -14,15 +14,44 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     steps:
-      - name: Configure OCI API credentials
+      - name: Normalize and inspect OCI API key
         shell: bash
         env:
           OCI_PRIVATE_KEY_PEM: ${{ secrets.OCI_PRIVATE_KEY }}
         run: |
           set -Eeuo pipefail
           mkdir -p "$HOME/.oci"
-          printf '%s' "$OCI_PRIVATE_KEY_PEM" > "$HOME/.oci/oci_api_key.pem"
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          value = os.environ.get('OCI_PRIVATE_KEY_PEM', '').strip()
+          if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+              value = value[1:-1]
+          if '\\n' in value and '\n' not in value:
+              value = value.replace('\\r', '').replace('\\n', '\n')
+          value = value.replace('\r', '').strip() + '\n'
+          Path.home().joinpath('.oci/oci_api_key.pem').write_text(value, encoding='utf-8')
+          PY
           chmod 600 "$HOME/.oci/oci_api_key.pem"
+
+          HEADER="$(head -n 1 "$HOME/.oci/oci_api_key.pem" || true)"
+          case "$HEADER" in
+            '-----BEGIN PRIVATE KEY-----') echo 'key_format=pkcs8_private' ;;
+            '-----BEGIN RSA PRIVATE KEY-----') echo 'key_format=pkcs1_rsa_private' ;;
+            '-----BEGIN ENCRYPTED PRIVATE KEY-----') echo 'key_format=encrypted_private_unsupported' ;;
+            '-----BEGIN PUBLIC KEY-----'|'-----BEGIN RSA PUBLIC KEY-----') echo 'key_format=public_key_incorrect' ;;
+            '-----BEGIN OPENSSH PRIVATE KEY-----') echo 'key_format=openssh_private_incorrect_for_oci' ;;
+            '') echo 'key_format=empty' ;;
+            *) echo 'key_format=unrecognized' ;;
+          esac
+
+          if timeout 5 openssl pkey -in "$HOME/.oci/oci_api_key.pem" -passin pass: -noout >/dev/null 2>&1; then
+            echo 'openssl_private_key_validation=success'
+          else
+            echo 'openssl_private_key_validation=failure'
+          fi
+
           cat > "$HOME/.oci/config" <<EOF
           [DEFAULT]
           user=${{ secrets.OCI_USER_OCID }}
@@ -31,6 +60,7 @@ jobs:
           region=${{ vars.OCI_REGION }}
           key_file=$HOME/.oci/oci_api_key.pem
           EOF
+          chmod 600 "$HOME/.oci/config"
       - name: Install OCI CLI
         shell: bash
         run: pipx install --quiet oci-cli
@@ -40,6 +70,8 @@ jobs:
           TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
           CONFIGURED_COMPARTMENT_OCID: ${{ vars.OCI_COMPARTMENT_OCID }}
           CONFIGURED_NAMESPACE: ${{ vars.OCI_NAMESPACE }}
+          OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING: 'True'
+          SUPPRESS_LABEL_WARNING: 'True'
         run: |
           set +e
           redact() { sed -E 's/ocid1\.[A-Za-z0-9._-]+/[REDACTED_OCID]/g'; }
@@ -53,17 +85,8 @@ jobs:
           echo "compartment_list_exit=$COMP_RC"
           if [ "$COMP_RC" -ne 0 ]; then
             echo 'compartment_list_error_begin'
-            head -n 30 /tmp/comp.err | redact
+            head -n 20 /tmp/comp.err | redact
             echo 'compartment_list_error_end'
-          fi
-
-          oci search resource structured-search --query-text "query compartment resources where displayName = 'NituWAGateway'" --limit 1 --output json >/tmp/search.out 2>/tmp/search.err
-          SEARCH_RC=$?
-          echo "resource_search_exit=$SEARCH_RC"
-          if [ "$SEARCH_RC" -ne 0 ]; then
-            echo 'resource_search_error_begin'
-            head -n 30 /tmp/search.err | redact
-            echo 'resource_search_error_end'
           fi
 
           oci os ns get --output json >/tmp/ns.out 2>/tmp/ns.err
@@ -71,7 +94,7 @@ jobs:
           echo "namespace_lookup_exit=$NS_RC"
           if [ "$NS_RC" -ne 0 ]; then
             echo 'namespace_lookup_error_begin'
-            head -n 30 /tmp/ns.err | redact
+            head -n 20 /tmp/ns.err | redact
             echo 'namespace_lookup_error_end'
           fi
 
