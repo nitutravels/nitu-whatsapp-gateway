@@ -103,27 +103,42 @@ jobs:
         env:
           TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
           CONFIGURED_COMPARTMENT_OCID: ${{ vars.OCI_COMPARTMENT_OCID }}
+          CONFIGURED_NAMESPACE: ${{ vars.OCI_NAMESPACE }}
         run: |
           set -Eeuo pipefail
+
           if [[ "$CONFIGURED_COMPARTMENT_OCID" =~ ^ocid1\.compartment\. ]]; then
             COMPARTMENT_OCID="$CONFIGURED_COMPARTMENT_OCID"
             echo "Using configured OCI compartment."
           else
-            COMPARTMENT_OCID="$TENANCY_OCID"
-            echo "No valid compartment OCID is configured; using the tenancy root compartment."
+            echo "Configured OCI_COMPARTMENT_OCID is not a compartment OCID; locating NituWAGateway by name."
+            COMPARTMENT_OCID="$(
+              oci iam compartment list \
+                --compartment-id "$TENANCY_OCID" \
+                --compartment-id-in-subtree true \
+                --access-level ANY \
+                --all \
+                --output json |
+              jq -r '.data[] | select(.name == "NituWAGateway" and .["lifecycle-state"] == "ACTIVE") | .id' |
+              head -n 1
+            )"
           fi
-          if [[ ! "$COMPARTMENT_OCID" =~ ^ocid1\.(compartment|tenancy)\. ]]; then
-            echo "Unable to resolve a valid Oracle compartment or tenancy OCID." >&2
+
+          if [[ ! "$COMPARTMENT_OCID" =~ ^ocid1\.compartment\. ]]; then
+            echo "Unable to locate the active NituWAGateway compartment. OCI_COMPARTMENT_OCID must start with ocid1.compartment." >&2
             exit 1
           fi
-          NAMESPACE="$(oci os ns get --query data --raw-output)"
+
+          NAMESPACE="$CONFIGURED_NAMESPACE"
           if [[ -z "$NAMESPACE" || "$NAMESPACE" == "null" ]]; then
-            echo "Unable to resolve the Object Storage namespace." >&2
+            echo "OCI_NAMESPACE is missing from the production environment variables." >&2
             exit 1
           fi
+
           echo "TF_VAR_compartment_ocid=$COMPARTMENT_OCID" >> "$GITHUB_ENV"
           echo "OCI_RESOLVED_COMPARTMENT_OCID=$COMPARTMENT_OCID" >> "$GITHUB_ENV"
           echo "OCI_RESOLVED_NAMESPACE=$NAMESPACE" >> "$GITHUB_ENV"
+          echo "Resolved Oracle compartment and Object Storage namespace."
       - name: Create or secure Terraform state bucket
         shell: bash
         env:
