@@ -63,7 +63,6 @@ jobs:
       TF_IN_AUTOMATION: "true"
       TF_INPUT: "false"
       TF_VAR_tenancy_ocid: ${{ secrets.OCI_TENANCY_OCID }}
-      TF_VAR_compartment_ocid: ${{ vars.OCI_COMPARTMENT_OCID }}
       TF_VAR_region: ${{ vars.OCI_REGION }}
       TF_VAR_gateway_api_key: ${{ secrets.GATEWAY_API_KEY }}
       TF_VAR_gateway_admin_token: ${{ secrets.GATEWAY_ADMIN_TOKEN }}
@@ -99,23 +98,59 @@ jobs:
         run: |
           pipx install oci-cli
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Resolve Oracle tenancy resources
+        shell: bash
+        env:
+          TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
+        run: |
+          set -Eeuo pipefail
+          COMPARTMENT_OCID="$(
+            oci iam compartment list \
+              --compartment-id "$TENANCY_OCID" \
+              --compartment-id-in-subtree true \
+              --access-level ACCESSIBLE \
+              --all \
+              --output json |
+            jq -r '.data[] | select(.name == "NituWAGateway" and .["lifecycle-state"] == "ACTIVE") | .id' |
+            head -n 1
+          )"
+          if [[ ! "$COMPARTMENT_OCID" =~ ^ocid1\.compartment\. ]]; then
+            echo "Unable to find the active NituWAGateway compartment." >&2
+            exit 1
+          fi
+          NAMESPACE="$(oci os ns get --query data --raw-output)"
+          if [[ -z "$NAMESPACE" || "$NAMESPACE" == "null" ]]; then
+            echo "Unable to resolve the Object Storage namespace." >&2
+            exit 1
+          fi
+          echo "TF_VAR_compartment_ocid=$COMPARTMENT_OCID" >> "$GITHUB_ENV"
+          echo "OCI_RESOLVED_COMPARTMENT_OCID=$COMPARTMENT_OCID" >> "$GITHUB_ENV"
+          echo "OCI_RESOLVED_NAMESPACE=$NAMESPACE" >> "$GITHUB_ENV"
+          echo "Resolved the NituWAGateway compartment and Object Storage namespace."
       - name: Create or secure Terraform state bucket
         shell: bash
+        env:
+          STATE_BUCKET: ${{ vars.OCI_TF_STATE_BUCKET }}
         run: |
+          set -Eeuo pipefail
+          if [[ -z "$STATE_BUCKET" ]]; then
+            echo "OCI_TF_STATE_BUCKET is missing." >&2
+            exit 1
+          fi
           if ! oci os bucket get \
-            --namespace-name "${{ vars.OCI_NAMESPACE }}" \
-            --bucket-name "${{ vars.OCI_TF_STATE_BUCKET }}" >/dev/null 2>&1; then
+            --namespace-name "$OCI_RESOLVED_NAMESPACE" \
+            --bucket-name "$STATE_BUCKET" >/dev/null 2>&1; then
             oci os bucket create \
-              --namespace-name "${{ vars.OCI_NAMESPACE }}" \
-              --compartment-id "${{ vars.OCI_COMPARTMENT_OCID }}" \
-              --name "${{ vars.OCI_TF_STATE_BUCKET }}" \
+              --namespace-name "$OCI_RESOLVED_NAMESPACE" \
+              --compartment-id "$OCI_RESOLVED_COMPARTMENT_OCID" \
+              --name "$STATE_BUCKET" \
               --public-access-type NoPublicAccess \
               --storage-tier Standard \
               --versioning Enabled >/dev/null
           else
             oci os bucket update \
-              --namespace-name "${{ vars.OCI_NAMESPACE }}" \
-              --bucket-name "${{ vars.OCI_TF_STATE_BUCKET }}" \
+              --namespace-name "$OCI_RESOLVED_NAMESPACE" \
+              --bucket-name "$STATE_BUCKET" \
               --public-access-type NoPublicAccess \
               --versioning Enabled \
               --force >/dev/null
@@ -124,14 +159,16 @@ jobs:
         shell: bash
         run: echo "TF_VAR_gateway_image=ghcr.io/${GITHUB_REPOSITORY,,}:latest" >> "$GITHUB_ENV"
       - name: Terraform init
-        run: >-
-          terraform init -reconfigure
-          -backend-config="bucket=${{ vars.OCI_TF_STATE_BUCKET }}"
-          -backend-config="namespace=${{ vars.OCI_NAMESPACE }}"
-          -backend-config="region=${{ vars.OCI_REGION }}"
-          -backend-config="key=nitu-whatsapp-gateway/terraform.tfstate"
-          -backend-config="auth=APIKey"
-          -backend-config="config_file_profile=DEFAULT"
+        env:
+          STATE_BUCKET: ${{ vars.OCI_TF_STATE_BUCKET }}
+        run: |
+          terraform init -reconfigure \
+            -backend-config="bucket=$STATE_BUCKET" \
+            -backend-config="namespace=$OCI_RESOLVED_NAMESPACE" \
+            -backend-config="region=${{ vars.OCI_REGION }}" \
+            -backend-config="key=nitu-whatsapp-gateway/terraform.tfstate" \
+            -backend-config="auth=APIKey" \
+            -backend-config="config_file_profile=DEFAULT"
       - run: terraform fmt -check -recursive
       - run: terraform validate
       - run: terraform plan -out=tfplan
