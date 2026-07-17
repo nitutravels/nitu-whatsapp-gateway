@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>Nitu WhatsApp Gateway</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <div><p class="eyebrow">NITU TRAVELS</p><h1>WhatsApp Gateway</h1></div>
+      <button id="logoutToken" class="secondary">Forget token</button>
+    </header>
+
+    <section id="loginCard" class="card narrow">
+      <h2>Administrator access</h2>
+      <p>Enter the ADMIN_TOKEN stored in your GitHub repository secrets.</p>
+      <form id="loginForm"><input id="token" type="password" minlength="32" placeholder="Administrator token" required><button>Open dashboard</button></form>
+    </section>
+
+    <div id="dashboard" hidden>
+      <section class="grid stats">
+        <article class="card"><span>Status</span><strong id="status">—</strong></article>
+        <article class="card"><span>Account</span><strong id="account">—</strong></article>
+        <article class="card"><span>Queued</span><strong id="queued">0</strong></article>
+        <article class="card"><span>Failed</span><strong id="failed">0</strong></article>
+      </section>
+
+      <section id="pairCard" class="card">
+        <h2>Link WhatsApp</h2>
+        <p>Use the full international number without “+”. Example: <code>919810000000</code>.</p>
+        <form id="pairForm" class="inline"><input id="phone" inputmode="numeric" placeholder="91XXXXXXXXXX" required><button>Generate pairing code</button></form>
+        <div id="pairingOutput" class="pairing" hidden><span>Pairing code</span><strong id="pairingCode"></strong><p>WhatsApp → Linked devices → Link a device → Link with phone number.</p></div>
+        <img id="qr" alt="WhatsApp QR code" hidden>
+      </section>
+
+      <section class="card">
+        <div class="sectionHead"><div><h2>Send test message</h2><p>The request enters the durable queue.</p></div></div>
+        <form id="testForm" class="twoCol"><input id="testTo" inputmode="numeric" placeholder="Recipient with country code" required><textarea id="testText" placeholder="Test message" required></textarea><button>Queue test</button></form>
+      </section>
+
+      <section class="card">
+        <div class="sectionHead"><div><h2>Recent messages</h2><p>Delivery status updates appear automatically.</p></div><button id="refresh" class="secondary">Refresh</button></div>
+        <div class="tableWrap"><table><thead><tr><th>Created</th><th>Recipient</th><th>Status</th><th>Attempts</th><th>Error</th><th>Action</th></tr></thead><tbody id="messages"></tbody></table></div>
+      </section>
+
+      <section class="card dangerZone">
+        <h2>Disconnect linked account</h2><p>This removes the saved WhatsApp browser session from Oracle.</p><button id="unlink" class="danger">Unlink WhatsApp</button>
+      </section>
+    </div>
+    <div id="toast" role="status"></div>
+  </main>
+<script src="/app.js" defer></script>
+</body>
+</html>

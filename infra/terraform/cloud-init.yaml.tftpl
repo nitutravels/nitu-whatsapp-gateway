@@ -1,0 +1,263 @@
+#cloud-config
+package_update: true
+package_upgrade: true
+packages:
+  - ca-certificates
+  - curl
+  - gnupg
+  - iptables
+  - tar
+  - sqlite3
+
+write_files:
+  - path: /opt/nitu-wa/.env
+    owner: root:root
+    permissions: '0600'
+    encoding: b64
+    content: ${env_file_b64}
+
+  - path: /opt/nitu-wa/docker-compose.yml
+    owner: root:root
+    permissions: '0644'
+    content: |
+      services:
+        gateway:
+          image: $${GATEWAY_IMAGE}
+          container_name: nitu-wa-gateway
+          restart: unless-stopped
+          init: true
+          shm_size: "1gb"
+          environment:
+            PORT: "3000"
+            DATA_DIR: /data
+            API_KEY: $${API_KEY}
+            ADMIN_TOKEN: $${ADMIN_TOKEN}
+            WEBHOOK_URL: $${WEBHOOK_URL:-}
+            WEBHOOK_SECRET: $${WEBHOOK_SECRET}
+            DEFAULT_COUNTRY_CODE: $${DEFAULT_COUNTRY_CODE:-91}
+            SEND_INTERVAL_MS: $${SEND_INTERVAL_MS:-6000}
+            MAX_ATTEMPTS: $${MAX_ATTEMPTS:-3}
+            MEDIA_ALLOWED_HOSTS: $${MEDIA_ALLOWED_HOSTS:-}
+            PUBLIC_BASE_URL: $${PUBLIC_BASE_URL:-}
+            LOG_LEVEL: $${LOG_LEVEL:-info}
+            CHROME_PATH: /usr/bin/chromium
+          volumes:
+            - ./data:/data
+          networks: [gateway_net]
+          security_opt: [no-new-privileges:true]
+          cap_drop: [ALL]
+        caddy:
+          image: caddy:2.11.1-alpine
+          container_name: nitu-wa-caddy
+          restart: unless-stopped
+          depends_on: [gateway]
+          environment:
+            SITE_ADDRESS: $${SITE_ADDRESS}
+          ports:
+            - "80:80"
+            - "443:443"
+            - "443:443/udp"
+          volumes:
+            - ./Caddyfile:/etc/caddy/Caddyfile:ro
+            - caddy_data:/data
+            - caddy_config:/config
+          networks: [gateway_net]
+          security_opt: [no-new-privileges:true]
+      networks:
+        gateway_net:
+          driver: bridge
+      volumes:
+        caddy_data:
+        caddy_config:
+
+  - path: /opt/nitu-wa/Caddyfile
+    owner: root:root
+    permissions: '0644'
+    content: |
+      {$SITE_ADDRESS} {
+        encode zstd gzip
+        reverse_proxy gateway:3000
+        header {
+          Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+          X-Content-Type-Options "nosniff"
+          X-Frame-Options "DENY"
+          Referrer-Policy "no-referrer"
+          Permissions-Policy "camera=(), microphone=(), geolocation=()"
+          -Server
+        }
+        log {
+          output stdout
+          format json
+        }
+      }
+
+
+  - path: /usr/local/sbin/nitu-wa-sync-config
+    owner: root:root
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      set -Eeuo pipefail
+      /usr/local/sbin/nitu-wa-metadata-guard
+      endpoint="http://169.254.169.254/opc/v2/instance/metadata/gateway_env_b64"
+      tmp="$(mktemp /opt/nitu-wa/.env.XXXXXX)"
+      trap 'rm -f "$tmp"' EXIT
+      encoded="$(curl --fail --silent --show-error --location \
+        --retry 3 --retry-all-errors --connect-timeout 5 --max-time 30 \
+        -H 'Authorization: Bearer Oracle' "$endpoint")"
+      [ -n "$encoded" ] || { echo "Empty gateway configuration metadata" >&2; exit 1; }
+      printf '%s' "$encoded" | base64 --decode > "$tmp"
+      grep -q '^GATEWAY_IMAGE=' "$tmp"
+      grep -q '^API_KEY=' "$tmp"
+      grep -q '^ADMIN_TOKEN=' "$tmp"
+      chmod 0600 "$tmp"
+      if ! cmp -s "$tmp" /opt/nitu-wa/.env; then
+        mv "$tmp" /opt/nitu-wa/.env
+        trap - EXIT
+        cd /opt/nitu-wa
+        /usr/bin/docker compose --env-file .env up -d --remove-orphans
+      fi
+
+  - path: /usr/local/sbin/nitu-wa-metadata-guard
+    owner: root:root
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      set -Eeuo pipefail
+      /usr/sbin/iptables -C DOCKER-USER -d 169.254.169.254/32 -j REJECT 2>/dev/null || \
+        /usr/sbin/iptables -I DOCKER-USER 1 -d 169.254.169.254/32 -j REJECT
+
+  - path: /usr/local/sbin/nitu-wa-update
+    owner: root:root
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      set -Eeuo pipefail
+      /usr/local/sbin/nitu-wa-metadata-guard
+      cd /opt/nitu-wa
+      /usr/bin/docker compose --env-file .env pull
+      /usr/bin/docker compose --env-file .env up -d --remove-orphans
+      /usr/bin/docker image prune -f --filter "until=168h"
+
+  - path: /usr/local/sbin/nitu-wa-backup
+    owner: root:root
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      set -Eeuo pipefail
+      install -d -m 0700 /opt/nitu-wa/backups
+      ts="$(date -u +%Y%m%dT%H%M%SZ)"
+      if [ -f /opt/nitu-wa/data/gateway.sqlite ]; then
+        sqlite3 /opt/nitu-wa/data/gateway.sqlite ".timeout 5000" ".backup '/opt/nitu-wa/backups/gateway-$${ts}.sqlite'"
+      fi
+      tar --ignore-failed-read -czf "/opt/nitu-wa/backups/auth-$${ts}.tar.gz" -C /opt/nitu-wa/data auth 2>/dev/null || true
+      find /opt/nitu-wa/backups -type f -mtime +7 -delete
+
+
+  - path: /etc/systemd/system/nitu-wa-metadata-guard.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Block containers from OCI instance metadata
+      After=docker.service
+      Requires=docker.service
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/nitu-wa-metadata-guard
+      RemainAfterExit=yes
+      [Install]
+      WantedBy=multi-user.target
+
+  - path: /etc/systemd/system/nitu-wa-config-sync.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Synchronize Nitu WhatsApp Gateway configuration from OCI metadata
+      After=docker.service network-online.target nitu-wa-metadata-guard.service
+      Wants=network-online.target
+      Requires=docker.service
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/nitu-wa-sync-config
+
+  - path: /etc/systemd/system/nitu-wa-config-sync.timer
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Check for Nitu WhatsApp Gateway configuration changes
+      [Timer]
+      OnBootSec=6min
+      OnUnitActiveSec=5min
+      RandomizedDelaySec=30
+      Persistent=true
+      [Install]
+      WantedBy=timers.target
+
+  - path: /etc/systemd/system/nitu-wa-update.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Update Nitu WhatsApp Gateway containers
+      After=docker.service network-online.target
+      Wants=network-online.target
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/nitu-wa-update
+
+  - path: /etc/systemd/system/nitu-wa-update.timer
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Check for Nitu WhatsApp Gateway updates
+      [Timer]
+      OnBootSec=8min
+      OnUnitActiveSec=10min
+      RandomizedDelaySec=60
+      Persistent=true
+      [Install]
+      WantedBy=timers.target
+
+  - path: /etc/systemd/system/nitu-wa-backup.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Back up Nitu WhatsApp Gateway state
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/nitu-wa-backup
+
+  - path: /etc/systemd/system/nitu-wa-backup.timer
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Daily Nitu WhatsApp Gateway backup
+      [Timer]
+      OnCalendar=*-*-* 02:30:00 UTC
+      RandomizedDelaySec=300
+      Persistent=true
+      [Install]
+      WantedBy=timers.target
+
+runcmd:
+  - install -m 0755 -d /etc/apt/keyrings
+  - curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+  - chmod a+r /etc/apt/keyrings/docker.asc
+  - >-
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc]
+    https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable"
+    > /etc/apt/sources.list.d/docker.list
+  - apt-get update
+  - apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  - install -d -m 0700 /opt/nitu-wa/data /opt/nitu-wa/backups
+  - chown -R 1000:1000 /opt/nitu-wa/data
+  - systemctl daemon-reload
+  - systemctl enable --now docker
+  - systemctl enable --now nitu-wa-metadata-guard.service
+  - /usr/local/sbin/nitu-wa-update
+  - systemctl enable --now nitu-wa-config-sync.timer nitu-wa-update.timer nitu-wa-backup.timer
+  - ufw allow 80/tcp || true
+  - ufw allow 443/tcp || true
+  - ufw allow 443/udp || true
+  - ufw --force enable || true
+
+final_message: "Nitu WhatsApp Gateway bootstrap completed."

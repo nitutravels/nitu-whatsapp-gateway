@@ -1,0 +1,71 @@
+name: Destroy Oracle deployment
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Type DESTROY to remove the infrastructure"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  destroy:
+    if: inputs.confirmation == 'DESTROY'
+    runs-on: ubuntu-latest
+    environment: production-destroy
+    defaults:
+      run:
+        working-directory: infra/terraform
+    env:
+      TF_IN_AUTOMATION: "true"
+      TF_INPUT: "false"
+      TF_VAR_tenancy_ocid: ${{ secrets.OCI_TENANCY_OCID }}
+      TF_VAR_compartment_ocid: ${{ vars.OCI_COMPARTMENT_OCID }}
+      TF_VAR_region: ${{ vars.OCI_REGION }}
+      TF_VAR_gateway_api_key: ${{ secrets.GATEWAY_API_KEY }}
+      TF_VAR_gateway_admin_token: ${{ secrets.GATEWAY_ADMIN_TOKEN }}
+      TF_VAR_gateway_webhook_secret: ${{ secrets.GATEWAY_WEBHOOK_SECRET }}
+      TF_VAR_gateway_domain: ${{ vars.GATEWAY_DOMAIN }}
+      TF_VAR_webhook_url: ${{ vars.WEBHOOK_URL }}
+      TF_VAR_default_country_code: ${{ vars.DEFAULT_COUNTRY_CODE || '91' }}
+      TF_VAR_media_allowed_hosts: ${{ vars.MEDIA_ALLOWED_HOSTS || 'nitutravels.in,www.nitutravels.in' }}
+      TF_VAR_availability_domain_index: ${{ vars.AVAILABILITY_DOMAIN_INDEX || '0' }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.15.8
+      - name: Configure OCI API credentials
+        shell: bash
+        env:
+          OCI_PRIVATE_KEY_PEM: ${{ secrets.OCI_PRIVATE_KEY }}
+        run: |
+          mkdir -p "$HOME/.oci"
+          printf '%s' "$OCI_PRIVATE_KEY_PEM" > "$HOME/.oci/oci_api_key.pem"
+          chmod 600 "$HOME/.oci/oci_api_key.pem"
+          cat > "$HOME/.oci/config" <<EOF
+          [DEFAULT]
+          user=${{ secrets.OCI_USER_OCID }}
+          fingerprint=${{ secrets.OCI_FINGERPRINT }}
+          tenancy=${{ secrets.OCI_TENANCY_OCID }}
+          region=${{ vars.OCI_REGION }}
+          key_file=$HOME/.oci/oci_api_key.pem
+          EOF
+      - name: Set container image variable
+        shell: bash
+        run: echo "TF_VAR_gateway_image=ghcr.io/${GITHUB_REPOSITORY,,}:latest" >> "$GITHUB_ENV"
+      - name: Terraform init
+        run: >-
+          terraform init -reconfigure
+          -backend-config="bucket=${{ vars.OCI_TF_STATE_BUCKET }}"
+          -backend-config="namespace=${{ vars.OCI_NAMESPACE }}"
+          -backend-config="region=${{ vars.OCI_REGION }}"
+          -backend-config="key=nitu-whatsapp-gateway/terraform.tfstate"
+          -backend-config="auth=APIKey"
+          -backend-config="config_file_profile=DEFAULT"
+      - name: Remove prevent_destroy guard
+        run: sed -i 's/prevent_destroy = true/prevent_destroy = false/' compute.tf
+      - run: terraform destroy -auto-approve
