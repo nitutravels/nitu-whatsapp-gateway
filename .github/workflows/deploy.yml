@@ -107,31 +107,70 @@ jobs:
         run: |
           set -Eeuo pipefail
 
+          if [[ ! "$TENANCY_OCID" =~ ^ocid1\.tenancy\. ]]; then
+            echo "::error::OCI_TENANCY_OCID is not a tenancy OCID. It must start with ocid1.tenancy."
+            exit 1
+          fi
+
+          COMPARTMENT_OCID=""
           if [[ "$CONFIGURED_COMPARTMENT_OCID" =~ ^ocid1\.compartment\. ]]; then
             COMPARTMENT_OCID="$CONFIGURED_COMPARTMENT_OCID"
             echo "Using configured OCI compartment."
           else
-            echo "Configured OCI_COMPARTMENT_OCID is not a compartment OCID; locating NituWAGateway by name."
-            COMPARTMENT_OCID="$(
+            echo "OCI_COMPARTMENT_OCID is absent or invalid; locating NituWAGateway through IAM."
+            if COMPARTMENTS_JSON="$(
               oci iam compartment list \
                 --compartment-id "$TENANCY_OCID" \
                 --compartment-id-in-subtree true \
                 --access-level ANY \
                 --all \
-                --output json |
-              jq -r '.data[] | select(.name == "NituWAGateway" and .["lifecycle-state"] == "ACTIVE") | .id' |
-              head -n 1
-            )"
+                --output json 2>/tmp/oci-compartment-list.err
+            )"; then
+              COMPARTMENT_OCID="$(
+                jq -r '[.data[] | select(.name == "NituWAGateway" and .["lifecycle-state"] == "ACTIVE") | .id][0] // empty' \
+                  <<<"$COMPARTMENTS_JSON"
+              )"
+            else
+              echo "IAM compartment listing was unavailable; trying OCI Search."
+            fi
           fi
 
           if [[ ! "$COMPARTMENT_OCID" =~ ^ocid1\.compartment\. ]]; then
-            echo "Unable to locate the active NituWAGateway compartment. OCI_COMPARTMENT_OCID must start with ocid1.compartment." >&2
+            if SEARCH_JSON="$(
+              oci search resource structured-search \
+                --query-text "query compartment resources matching 'NituWAGateway'" \
+                --output json 2>/tmp/oci-resource-search.err
+            )"; then
+              COMPARTMENT_OCID="$(
+                jq -r '[.data.items[] | select((.["display-name"] // .displayName // "") == "NituWAGateway") | (.identifier // .id)][0] // empty' \
+                  <<<"$SEARCH_JSON"
+              )"
+            fi
+          fi
+
+          if [[ ! "$COMPARTMENT_OCID" =~ ^ocid1\.compartment\. ]]; then
+            echo "::error::Unable to resolve the NituWAGateway compartment. Replace production variable OCI_COMPARTMENT_OCID with the OCID shown on Oracle Console → Identity & Security → Compartments → NituWAGateway. It must start with ocid1.compartment."
+            if [[ -s /tmp/oci-compartment-list.err ]]; then
+              echo "OCI IAM diagnostic: $(tail -n 1 /tmp/oci-compartment-list.err)" >&2
+            fi
+            if [[ -s /tmp/oci-resource-search.err ]]; then
+              echo "OCI Search diagnostic: $(tail -n 1 /tmp/oci-resource-search.err)" >&2
+            fi
             exit 1
           fi
 
           NAMESPACE="$CONFIGURED_NAMESPACE"
           if [[ -z "$NAMESPACE" || "$NAMESPACE" == "null" ]]; then
-            echo "OCI_NAMESPACE is missing from the production environment variables." >&2
+            echo "OCI_NAMESPACE is missing; resolving it through Object Storage."
+            if ! NAMESPACE="$(oci os ns get --query data --raw-output 2>/tmp/oci-namespace.err)"; then
+              NAMESPACE=""
+            fi
+          fi
+          if [[ -z "$NAMESPACE" || "$NAMESPACE" == "null" ]]; then
+            echo "::error::Unable to resolve Object Storage namespace. Set production variable OCI_NAMESPACE to the namespace shown under Oracle tenancy details."
+            if [[ -s /tmp/oci-namespace.err ]]; then
+              echo "OCI namespace diagnostic: $(tail -n 1 /tmp/oci-namespace.err)" >&2
+            fi
             exit 1
           fi
 
