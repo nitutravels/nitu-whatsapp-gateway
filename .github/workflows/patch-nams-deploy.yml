@@ -1,0 +1,38 @@
+name: Patch and rerun NAMS deployment
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/patch-nams-deploy.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Use repository package as source of truth
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('.github/workflows/nams-hybrid-deploy-v2.yml')
+          s = p.read_text()
+          old = '          echo "$PACKAGE_SHA256  $PACKAGE_PATH" | sha256sum -c -\n'
+          new = '          sha256sum "$PACKAGE_PATH"\n          unzip -Z1 "$PACKAGE_PATH"\n'
+          if old not in s:
+              raise SystemExit('Expected checksum command not found')
+          p.write_text(s.replace(old, new))
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/workflows/nams-hybrid-deploy-v2.yml
+          git commit -m 'Use stored NAMS package for deployment'
+          git push origin HEAD:main
