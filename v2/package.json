@@ -1,0 +1,28 @@
+{
+  "name": "nitu-whatsapp-gateway",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Durable self-hosted WhatsApp Web gateway using Baileys WebSocket transport",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "check": "node --check src/config.js && node --check src/crypto.js && node --check src/db.js && node --check src/auth-store.js && node --check src/security.js && node --check src/whatsapp.js && node --check src/queue.js && node --check src/webhook.js && node --check src/routes.js && node --check src/server.js && node --check public/app.js",
+    "test": "node --test tests/*.test.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@cacheable/node-cache": "1.7.5",
+    "@fastify/helmet": "13.1.0",
+    "@fastify/rate-limit": "11.1.0",
+    "@fastify/static": "10.1.0",
+    "@hapi/boom": "9.1.4",
+    "baileys": "7.0.0-rc13",
+    "fastify": "5.10.0",
+    "pino": "9.14.0",
+    "qrcode": "1.5.4",
+    "zod": "4.4.3"
+  }
+}

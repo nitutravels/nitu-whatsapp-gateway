@@ -1,0 +1,46 @@
+name: Validate Baileys gateway v2
+
+on:
+  push:
+    branches: [main, rebuild/baileys-v2]
+    paths:
+      - 'v2/**'
+      - 'Dockerfile'
+      - '.github/workflows/validate-baileys-v2.yml'
+  pull_request:
+    paths:
+      - 'v2/**'
+      - 'Dockerfile'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-baileys-v2-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22.16.0'
+      - name: Install exact direct dependencies
+        working-directory: v2
+        run: npm install --no-audit --no-fund
+      - name: Syntax validation
+        working-directory: v2
+        run: npm run check
+      - name: Durability tests
+        working-directory: v2
+        run: npm test
+      - name: Build Chromium-free production image
+        run: docker build --tag nitu-whatsapp-gateway:v2 .
+      - name: Assert Chromium is absent
+        run: |
+          set -Eeuo pipefail
+          docker run --rm --entrypoint sh nitu-whatsapp-gateway:v2 -c \
+            '! command -v chromium && ! command -v google-chrome && ! find /app/node_modules -maxdepth 2 -type d -name puppeteer -print -quit | grep -q .'
