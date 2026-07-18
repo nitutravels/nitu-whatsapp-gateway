@@ -5,9 +5,12 @@ resource "oci_core_instance" "gateway" {
   shape                = var.instance_shape
   preserve_boot_volume = true
 
-  shape_config {
-    ocpus         = var.instance_ocpus
-    memory_in_gbs = var.instance_memory_gbs
+  dynamic "shape_config" {
+    for_each = can(regex("\\.Flex$", var.instance_shape)) ? [1] : []
+    content {
+      ocpus         = var.instance_ocpus
+      memory_in_gbs = var.instance_memory_gbs
+    }
   }
 
   instance_options {
