@@ -75,6 +75,7 @@ async function restartForRelink(gateway, reason) {
     await delay(1500);
     archiveInvalidSession(gateway, reason);
     gateway.status = 'starting';
+    gateway.lastError = null;
     gateway.qrDataUrl = null;
     gateway.pairingCode = null;
     await gateway.startClientOnly();
@@ -115,10 +116,11 @@ function installPairingRecovery(WhatsAppGateway, config) {
     this.pairingCode = null;
 
     this.pairingRequestPromise = (async () => {
-      const loggedOut = /logout/i.test(previousError);
+      const loggedOut = /logout|auth(?:entication)? failure|invalid session/i.test(previousError);
       if (previousStatus === 'auth_failure' || (previousStatus === 'disconnected' && loggedOut)) {
         await restartForRelink(this, previousStatus);
-      } else if (!pageIsUsable(this.client)) {
+      } else if (previousStatus === 'error' || !pageIsUsable(this.client)) {
+        this.status = 'starting';
         this.qrDataUrl = null;
         await this.recreateClient();
       }
