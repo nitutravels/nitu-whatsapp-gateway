@@ -18,6 +18,9 @@ jobs:
       TF_VAR_tenancy_ocid: ${{ secrets.OCI_TENANCY_OCID }}
       TF_VAR_compartment_ocid: ${{ vars.OCI_COMPARTMENT_OCID }}
       TF_VAR_region: ${{ vars.OCI_REGION }}
+      TF_VAR_instance_shape: "VM.Standard.E2.1.Micro"
+      TF_VAR_instance_ocpus: "1"
+      TF_VAR_instance_memory_gbs: "1"
       TF_VAR_gateway_api_key: ${{ secrets.GATEWAY_API_KEY }}
       TF_VAR_gateway_admin_token: ${{ secrets.GATEWAY_ADMIN_TOKEN }}
       TF_VAR_gateway_webhook_secret: ${{ secrets.GATEWAY_WEBHOOK_SECRET }}
@@ -40,6 +43,35 @@ jobs:
           git fetch --depth=1 origin main
           rm -rf /tmp/gateway-main
           git worktree add --detach /tmp/gateway-main FETCH_HEAD
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Wait for verified AMD64 image
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          image="$TF_VAR_gateway_image"
+          ready=0
+          for attempt in $(seq 1 30); do
+            if docker buildx imagetools inspect "$image" >/tmp/image-manifest.txt 2>/tmp/image-manifest.err && \
+               grep -Eq 'linux/amd64|Platform:[[:space:]]+linux/amd64' /tmp/image-manifest.txt; then
+              ready=1
+              break
+            fi
+            sleep 20
+          done
+          if [ "$ready" -ne 1 ]; then
+            {
+              echo 'APPLY_STATUS=image_not_ready'
+              echo 'ERROR_BLOCK_BEGIN'
+              echo 'The public GHCR latest tag does not yet expose linux/amd64.'
+              tail -n 40 /tmp/image-manifest.txt 2>/dev/null || true
+              tail -n 20 /tmp/image-manifest.err 2>/dev/null || true
+              echo 'ERROR_BLOCK_END'
+            } > oracle-priority-repair-result.txt
+            exit 1
+          fi
+          echo 'IMAGE_PLATFORM=linux/amd64' > oracle-priority-repair-result.txt
 
       - uses: hashicorp/setup-terraform@v4
         with:
@@ -75,7 +107,7 @@ jobs:
           EOF
           chmod 600 "$HOME/.oci/config"
 
-      - name: Apply current Terraform and capture exact result
+      - name: Apply E2 fallback and capture exact result
         id: apply
         shell: bash
         env:
@@ -100,18 +132,36 @@ jobs:
             exit 0
           fi
 
+          terraform fmt -check -recursive -no-color >/tmp/fmt.log 2>&1
+          fmt_status=$?
+          terraform validate -no-color >/tmp/validate.log 2>&1
+          validate_status=$?
+          if [ "$fmt_status" -ne 0 ] || [ "$validate_status" -ne 0 ]; then
+            {
+              echo 'APPLY_STATUS=validation_failed'
+              cat /tmp/fmt.log
+              cat /tmp/validate.log
+            } > "$GITHUB_WORKSPACE/oracle-priority-repair-result.txt"
+            exit 0
+          fi
+
           terraform apply -auto-approve -no-color >/tmp/apply.log 2>&1
           apply_status=$?
           if [ "$apply_status" -eq 0 ]; then
             {
               echo 'APPLY_STATUS=success'
+              echo 'IMAGE_PLATFORM=linux/amd64'
+              echo 'INSTANCE_SHAPE=VM.Standard.E2.1.Micro'
               echo "PUBLIC_IP=$(terraform output -raw public_ip 2>/dev/null || true)"
               echo "DASHBOARD_URL=$(terraform output -raw dashboard_url 2>/dev/null || true)"
               echo "HEALTH_URL=$(terraform output -raw health_url 2>/dev/null || true)"
+              echo "INSTANCE_ID=$(terraform output -raw instance_id 2>/dev/null || true)"
             } > "$GITHUB_WORKSPACE/oracle-priority-repair-result.txt"
           else
             {
               echo 'APPLY_STATUS=failed'
+              echo 'IMAGE_PLATFORM=linux/amd64'
+              echo 'INSTANCE_SHAPE=VM.Standard.E2.1.Micro'
               echo 'ERROR_BLOCK_BEGIN'
               awk 'BEGIN{p=0;c=0} /^Error:/{p=1;c=0} p{print;c++} p&&c>=45{p=0}' /tmp/apply.log | tail -n 180
               echo 'OCI_ERROR_SUMMARY_BEGIN'
@@ -131,7 +181,7 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add oracle-priority-repair-result.txt
-          git diff --cached --quiet || git commit -m 'Record exact Oracle priority repair result'
+          git diff --cached --quiet || git commit -m 'Record E2 priority repair result'
           git push origin HEAD:oracle-resource-audit
 
       - name: Mark unsuccessful apply
