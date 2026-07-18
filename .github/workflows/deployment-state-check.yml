@@ -11,31 +11,18 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    environment: production
     steps:
       - uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: 1.15.8
           terraform_wrapper: false
-      - name: Initialize full Terraform project
+      - name: Show canonical Terraform formatting
         shell: bash
-        env:
-          KEY: ${{ secrets.OCI_PRIVATE_KEY }}
-          FP: ${{ secrets.OCI_FINGERPRINT }}
-          BUCKET: ${{ vars.OCI_TF_STATE_BUCKET }}
-          NS: ${{ vars.OCI_NAMESPACE }}
         run: |
           set +e
-          mkdir -p "$HOME/.oci" /tmp/src
-          printf '%s\n' "$KEY" > "$HOME/.oci/key.pem"
-          chmod 600 "$HOME/.oci/key.pem"
-          FP="$(printf '%s' "$FP" | tr -d '[:space:]')"
-          printf '[DEFAULT]\nuser=%s\nfingerprint=%s\ntenancy=%s\nregion=%s\nkey_file=%s/.oci/key.pem\n' '${{ secrets.OCI_USER_OCID }}' "$FP" '${{ secrets.OCI_TENANCY_OCID }}' '${{ vars.OCI_REGION }}' "$HOME" > "$HOME/.oci/config"
-          chmod 600 "$HOME/.oci/config"
-          curl -fsSL 'https://github.com/nitutravels/nitu-whatsapp-gateway/archive/8d8f962fc0ee7c0fcfd1b82d5d721481cf80c872.tar.gz' | tar -xz -C /tmp/src --strip-components=1
+          mkdir -p /tmp/src
+          curl -fsSL 'https://github.com/nitutravels/nitu-whatsapp-gateway/archive/4ae0e3bc31dbccefadb43d93a0f24e9e66e1c289.tar.gz' | tar -xz -C /tmp/src --strip-components=1
           cd /tmp/src/infra/terraform
-          terraform init -reconfigure -no-color -backend-config="bucket=$BUCKET" -backend-config="namespace=$NS" -backend-config="region=${{ vars.OCI_REGION }}" -backend-config="key=nitu-whatsapp-gateway/terraform.tfstate" -backend-config="auth=APIKey" -backend-config="config_file_profile=DEFAULT" >/tmp/init.log 2>&1
-          RC=$?
-          echo "full_project_init_exit=$RC"
-          tail -n 45 /tmp/init.log
+          terraform fmt -check -diff -recursive -no-color
+          echo "fmt_exit=$?"
           exit 1
