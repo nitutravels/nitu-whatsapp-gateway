@@ -26,62 +26,106 @@ function pageIsUsable(client) {
 async function waitForAuthenticationScreen(gateway, timeoutMs = 70000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (gateway.status === 'ready') throw new Error('A WhatsApp account is already linked');
-    if (pageIsUsable(gateway.client) && (gateway.qrDataUrl || gateway.status === 'awaiting_pairing')) return;
-    if (gateway.status === 'error') {
-      throw new Error(gateway.lastError || 'WhatsApp browser could not start');
-    }
+    if (gateway.status === 'ready') return 'ready';
+    if (pageIsUsable(gateway.client) && gateway.qrDataUrl) return 'qr';
+    if (gateway.status === 'error') throw new Error(gateway.lastError || 'WhatsApp browser could not start');
     await delay(500);
   }
-  throw new Error('WhatsApp is still starting. The QR code remains available; retry the pairing code after 30 seconds.');
+  throw new Error('WhatsApp did not produce a QR code within the recovery window');
+}
+
+function sessionRootFor(gateway) {
+  const authPath = gateway?.constructor?.configAuthPath || '';
+  return authPath ? path.join(authPath, 'session-primary') : '';
 }
 
 function archiveInvalidSession(gateway, reason) {
-  const sessionRoot = path.join(gateway?.constructor?.configAuthPath || '', 'session-primary');
-  if (!sessionRoot || sessionRoot === 'session-primary' || !fs.existsSync(sessionRoot)) return null;
+  const sessionRoot = sessionRootFor(gateway);
+  if (!sessionRoot || !fs.existsSync(sessionRoot)) return null;
 
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const archived = `${sessionRoot}.invalid-${stamp}`;
+  const archived = `${sessionRoot}.backup-${stamp}`;
   try {
     fs.renameSync(sessionRoot, archived);
-    gateway.logger?.warn?.({ reason, archived }, 'Archived invalid WhatsApp session before relinking');
+    gateway.logger?.warn?.({ reason, archived }, 'Archived WhatsApp session before fresh QR recovery');
 
     const parent = path.dirname(sessionRoot);
-    const prefix = `${path.basename(sessionRoot)}.invalid-`;
+    const prefix = `${path.basename(sessionRoot)}.backup-`;
     const oldArchives = fs.readdirSync(parent, { withFileTypes: true })
       .filter(entry => entry.isDirectory() && entry.name.startsWith(prefix))
-      .map(entry => ({ name: entry.name, fullPath: path.join(parent, entry.name), mtime: fs.statSync(path.join(parent, entry.name)).mtimeMs }))
+      .map(entry => ({ fullPath: path.join(parent, entry.name), mtime: fs.statSync(path.join(parent, entry.name)).mtimeMs }))
       .sort((a, b) => b.mtime - a.mtime)
-      .slice(2);
+      .slice(3);
     for (const item of oldArchives) fs.rmSync(item.fullPath, { recursive: true, force: true });
     return archived;
   } catch (error) {
-    gateway.logger?.warn?.({ err: error, reason, sessionRoot }, 'Could not archive invalid WhatsApp session');
+    gateway.logger?.warn?.({ err: error, reason, sessionRoot }, 'Could not archive WhatsApp session');
     return null;
   }
 }
 
-async function restartForRelink(gateway, reason) {
-  gateway.suppressRestart = true;
+async function terminateBrowser(gateway) {
   if (gateway.restartTimer) {
     clearTimeout(gateway.restartTimer);
     gateway.restartTimer = null;
   }
-  try {
-    if (gateway.client) {
-      try { await gateway.client.destroy(); } catch (error) { gateway.logger?.warn?.({ err: error }, 'WhatsApp browser destroy failed before relinking'); }
+
+  const browserProcess = (() => {
+    try { return gateway.client?.pupBrowser?.process?.() || null; } catch { return null; }
+  })();
+
+  if (gateway.client) {
+    try {
+      await withTimeout(gateway.client.destroy(), 12000, 'Timed out while closing the old WhatsApp browser');
+    } catch (error) {
+      gateway.logger?.warn?.({ err: error }, 'Graceful WhatsApp browser shutdown failed');
     }
-    gateway.client = null;
-    await delay(1500);
-    archiveInvalidSession(gateway, reason);
-    gateway.status = 'starting';
-    gateway.lastError = null;
-    gateway.qrDataUrl = null;
-    gateway.pairingCode = null;
-    await gateway.startClientOnly();
-  } finally {
-    gateway.suppressRestart = false;
   }
+
+  if (browserProcess && !browserProcess.killed) {
+    try { browserProcess.kill('SIGKILL'); } catch (error) { gateway.logger?.warn?.({ err: error }, 'Could not force-stop old Chromium process'); }
+  }
+  gateway.client = null;
+  await delay(1500);
+}
+
+async function startFreshQrRecovery(gateway, reason = 'manual_qr_recovery') {
+  if (gateway.qrRecoveryPromise) return gateway.qrRecoveryPromise;
+
+  gateway.qrRecoveryStartedAt = new Date().toISOString();
+  gateway.qrRecoveryError = null;
+  gateway.lastError = null;
+  gateway.status = 'recovering';
+  gateway.account = null;
+  gateway.qrDataUrl = null;
+  gateway.pairingCode = null;
+  gateway.suppressRestart = true;
+
+  gateway.qrRecoveryPromise = (async () => {
+    try {
+      await terminateBrowser(gateway);
+      archiveInvalidSession(gateway, reason);
+      gateway.prepareProfileForLaunch();
+      gateway.status = 'starting';
+      await gateway.startClientOnly();
+      const result = await waitForAuthenticationScreen(gateway, 90000);
+      gateway.lastError = null;
+      return result;
+    } catch (error) {
+      const message = String(error?.message || error);
+      gateway.status = 'error';
+      gateway.lastError = message;
+      gateway.qrRecoveryError = message;
+      gateway.logger?.error?.({ err: error }, 'Fresh QR recovery failed');
+      throw error;
+    } finally {
+      gateway.suppressRestart = false;
+      gateway.qrRecoveryPromise = null;
+    }
+  })();
+
+  gateway.qrRecoveryPromise.catch(() => {});
+  return gateway.qrRecoveryPromise;
 }
 
 function installPairingRecovery(WhatsAppGateway, config) {
@@ -91,74 +135,69 @@ function installPairingRecovery(WhatsAppGateway, config) {
   WhatsAppGateway.configAuthPath = config.AUTH_PATH;
 
   const originalGetStatus = prototype.getStatus;
-  prototype.getStatus = function getStatusWithPairingProgress() {
+  prototype.getStatus = function getStatusWithRecoveryProgress() {
     const status = originalGetStatus.call(this);
     return {
       ...status,
+      recoveryInProgress: Boolean(this.qrRecoveryPromise),
+      recoveryStartedAt: this.qrRecoveryStartedAt || null,
+      recoveryError: this.qrRecoveryError || null,
       pairingInProgress: Boolean(this.pairingRequestPromise),
       pairingRequestedAt: this.pairingRequestedAt || null
     };
   };
 
-  prototype.requestPairingCode = async function requestPairingCodeWithoutBrowserRestart(phoneNumber) {
-    if (!this.client) throw new Error('WhatsApp browser is not initialized');
-    if (this.status === 'ready') throw new Error('A WhatsApp account is already linked');
+  prototype.startFreshQrRecovery = function startFreshQrRecoveryFromAdmin(reason) {
+    return startFreshQrRecovery(this, reason);
+  };
 
+  prototype.startPairingCode = function startPairingCodeInBackground(phoneNumber) {
+    if (this.pairingRequestPromise) return this.pairingRequestPromise;
+    this.pairingRequestPromise = this.requestPairingCode(phoneNumber)
+      .catch(error => {
+        this.lastError = String(error?.message || error);
+        throw error;
+      })
+      .finally(() => { this.pairingRequestPromise = null; });
+    this.pairingRequestPromise.catch(() => {});
+    return this.pairingRequestPromise;
+  };
+
+  prototype.requestPairingCode = async function requestPairingCodeAfterHealthyQr(phoneNumber) {
+    if (this.status === 'ready') throw new Error('A WhatsApp account is already linked');
     const digits = String(phoneNumber || '').replace(/\D/g, '');
     if (!/^\d{8,15}$/.test(digits)) throw new Error('Enter the full international number without + or spaces');
-    if (this.pairingRequestPromise) return this.pairingRequestPromise;
 
-    const previousStatus = this.status;
-    const previousError = String(this.lastError || '');
-    const deadline = Date.now() + 80000;
-    this.pairingRequestedAt = new Date().toISOString();
-    this.lastError = null;
-    this.pairingCode = null;
-
-    this.pairingRequestPromise = (async () => {
-      const loggedOut = /logout|auth(?:entication)? failure|invalid session/i.test(previousError);
-      if (previousStatus === 'auth_failure' || (previousStatus === 'disconnected' && loggedOut)) {
-        await restartForRelink(this, previousStatus);
-      } else if (previousStatus === 'error' || !pageIsUsable(this.client)) {
-        this.status = 'starting';
-        this.qrDataUrl = null;
-        await this.recreateClient();
-      }
-
-      const startupBudget = Math.max(1000, Math.min(50000, deadline - Date.now()));
-      await waitForAuthenticationScreen(this, startupBudget);
-      if (!pageIsUsable(this.client)) throw new Error('WhatsApp browser closed while generating the pairing code');
-      if (typeof this.client.requestPairingCode !== 'function') {
-        throw new Error('The installed WhatsApp library does not support phone-number pairing');
-      }
-
-      const codeBudget = Math.max(1000, deadline - Date.now());
-      const code = await withTimeout(
-        this.client.requestPairingCode(digits, true, 180000),
-        codeBudget,
-        'Pairing code generation timed out'
-      );
-      const normalized = String(code || '').replace(/\s/g, '');
-      if (!normalized) throw new Error('WhatsApp returned an empty pairing code');
-
-      this.status = 'awaiting_pairing';
-      this.pairingCode = normalized;
-      this.qrDataUrl = null;
-      this.lastError = null;
-      return normalized;
-    })();
-
-    try {
-      return await this.pairingRequestPromise;
-    } catch (error) {
-      const message = String(error?.message || error);
-      this.lastError = message;
-      if (this.qrDataUrl) this.status = 'awaiting_pairing';
-      throw new Error(`${message}. You can still scan the QR code shown on this page from WhatsApp > Linked devices.`);
-    } finally {
-      this.pairingRequestPromise = null;
+    if (this.status === 'error' || !pageIsUsable(this.client) || !this.qrDataUrl) {
+      await startFreshQrRecovery(this, 'pairing_code_requested_while_unhealthy');
     }
+    if (this.status === 'ready') throw new Error('A WhatsApp account is already linked');
+    if (!pageIsUsable(this.client) || typeof this.client.requestPairingCode !== 'function') {
+      throw new Error('Phone-number pairing is unavailable; use the QR code');
+    }
+
+    this.pairingRequestedAt = new Date().toISOString();
+    this.pairingCode = null;
+    const code = await withTimeout(
+      this.client.requestPairingCode(digits, true, 180000),
+      30000,
+      'Phone-number pairing did not respond; use the QR code'
+    );
+    const normalized = String(code || '').replace(/\s/g, '');
+    if (!normalized) throw new Error('WhatsApp returned an empty pairing code; use the QR code');
+    this.status = 'awaiting_pairing';
+    this.pairingCode = normalized;
+    this.lastError = null;
+    return normalized;
   };
 }
 
-module.exports = { installPairingRecovery, pageIsUsable, waitForAuthenticationScreen, restartForRelink, withTimeout };
+module.exports = {
+  installPairingRecovery,
+  pageIsUsable,
+  waitForAuthenticationScreen,
+  startFreshQrRecovery,
+  terminateBrowser,
+  archiveInvalidSession,
+  withTimeout
+};
