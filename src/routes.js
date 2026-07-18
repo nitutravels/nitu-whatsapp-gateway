@@ -1,7 +1,6 @@
 const path = require('node:path');
 const { z } = require('zod');
 const fastifyStatic = require('@fastify/static');
-const config = require('./config');
 const db = require('./db');
 const { requireApiKey, requireAdmin, normalizePhone, validateMediaUrl } = require('./security');
 
@@ -34,8 +33,8 @@ async function registerRoutes(app, gateway) {
 
   app.get('/healthz', async () => ({ ok: true, service: 'nitu-whatsapp-gateway', time: new Date().toISOString() }));
   app.get('/readyz', async (request, reply) => {
-    const ready = gateway.getStatus().ready;
-    return reply.code(ready ? 200 : 503).send({ ready, status: gateway.getStatus().status });
+    const status = gateway.getStatus();
+    return reply.code(status.ready ? 200 : 503).send({ ready: status.ready, status: status.status });
   });
 
   app.post('/api/v1/messages', { preHandler: requireApiKey }, async (request, reply) => {
@@ -69,26 +68,39 @@ async function registerRoutes(app, gateway) {
   app.get('/admin/api/status', { preHandler: requireAdmin }, async () => gateway.getStatus());
   app.get('/admin/api/messages', { preHandler: requireAdmin }, async request => db.listMessages(Math.min(Number(request.query.limit) || 100, 500), request.query.status || null));
   app.get('/admin/api/inbound', { preHandler: requireAdmin }, async request => db.listInbound(Math.min(Number(request.query.limit) || 100, 500)));
+
+  app.post('/admin/api/recover-qr', { preHandler: requireAdmin }, async (request, reply) => {
+    const status = gateway.getStatus();
+    if (status.ready) return reply.code(409).send({ error: 'WhatsApp is already linked and ready' });
+    gateway.startFreshQrRecovery('admin_requested_fresh_qr').catch(error => {
+      app.log.error({ err: error }, 'Background QR recovery failed');
+    });
+    return reply.code(202).send({ accepted: true, status: 'recovering' });
+  });
+
+  app.post('/admin/api/pair', { preHandler: requireAdmin }, async (request, reply) => {
+    const parsed = z.object({ phoneNumber: z.string().min(8).max(30) }).safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: 'Enter the full international phone number' });
+    const status = gateway.getStatus();
+    if (status.ready) return reply.code(409).send({ error: 'WhatsApp is already linked and ready' });
+    gateway.startPairingCode(parsed.data.phoneNumber).catch(error => {
+      app.log.warn({ err: error }, 'Background pairing-code request failed');
+    });
+    return reply.code(202).send({ accepted: true, status: 'generating_pairing_code' });
+  });
+
   app.post('/admin/api/messages/:id/retry', { preHandler: requireAdmin }, async (request, reply) => {
     const record = db.retryMessage(request.params.id);
     if (!record) return reply.code(409).send({ error: 'Only failed messages can be retried' });
     db.addEvent(record.id, 'message.manual_retry', record);
     return reply.code(202).send(record);
   });
-  app.post('/admin/api/pair', { preHandler: requireAdmin }, async (request, reply) => {
-    const parsed = z.object({ phoneNumber: z.string().min(8).max(30) }).safeParse(request.body);
-    if (!parsed.success) return reply.code(400).send({ error: 'Enter the full international phone number' });
-    try {
-      const code = await gateway.requestPairingCode(parsed.data.phoneNumber);
-      return { pairingCode: code };
-    } catch (error) {
-      return reply.code(409).send({ error: error.message });
-    }
-  });
+
   app.post('/admin/api/logout', { preHandler: requireAdmin }, async () => {
     await gateway.logout();
     return { ok: true };
   });
+
   app.post('/admin/api/test', { preHandler: requireAdmin }, async (request, reply) => {
     const parsed = z.object({ to: z.string().min(8), text: z.string().min(1).max(1000) }).safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: 'Recipient and text are required' });
@@ -101,4 +113,5 @@ async function registerRoutes(app, gateway) {
   app.get('/', async (request, reply) => reply.sendFile('index.html'));
   app.get('/admin', async (request, reply) => reply.sendFile('index.html'));
 }
+
 module.exports = { registerRoutes };
