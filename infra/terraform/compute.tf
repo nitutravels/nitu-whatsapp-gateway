@@ -17,6 +17,17 @@ resource "oci_core_instance" "gateway" {
     are_legacy_imds_endpoints_disabled = true
   }
 
+  agent_config {
+    are_all_plugins_disabled = false
+    is_management_disabled   = false
+    is_monitoring_disabled   = false
+
+    plugins_config {
+      name          = "Compute Instance Run Command"
+      desired_state = "ENABLED"
+    }
+  }
+
   create_vnic_details {
     subnet_id        = oci_core_subnet.gateway.id
     assign_public_ip = false
