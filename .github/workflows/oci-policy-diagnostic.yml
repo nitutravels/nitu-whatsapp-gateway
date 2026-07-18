@@ -75,3 +75,5 @@ jobs:
           fi
 
           echo 'repository_specific_bucket_ready=yes'
+          echo 'Diagnostic intentionally exits nonzero after reporting verified state.'
+          exit 1
