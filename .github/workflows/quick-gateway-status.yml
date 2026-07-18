@@ -1,0 +1,43 @@
+name: One-shot gateway recovery probe
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/quick-gateway-status.yml']
+
+permissions:
+  contents: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v7
+      - name: Probe status and queue without sending
+        shell: bash
+        env:
+          DOMAIN: wa.nitutravels.in
+          ADMIN_TOKEN: ${{ secrets.GATEWAY_ADMIN_TOKEN }}
+        run: |
+          set +e
+          exec > >(tee docs/gateway-current-status.txt) 2>&1
+          ready_code="$(curl -sS --connect-timeout 10 --max-time 30 -o /tmp/ready.json -w '%{http_code}' "https://$DOMAIN/readyz" 2>/tmp/ready.err || echo 000)"
+          status_code="$(curl -sS --connect-timeout 10 --max-time 30 -H "Authorization: Bearer $ADMIN_TOKEN" -o /tmp/status.json -w '%{http_code}' "https://$DOMAIN/admin/api/status" 2>/tmp/status.err || echo 000)"
+          queue_code="$(curl -sS --connect-timeout 10 --max-time 30 -H "Authorization: Bearer $ADMIN_TOKEN" -o /tmp/messages.json -w '%{http_code}' "https://$DOMAIN/admin/api/messages?limit=20" 2>/tmp/queue.err || echo 000)"
+          echo "READY_HTTP=$ready_code"
+          echo "STATUS_HTTP=$status_code"
+          echo "QUEUE_HTTP=$queue_code"
+          echo -n 'STATUS='; jq -c '{status,ready,account,lastError,queue}' /tmp/status.json 2>/dev/null || cat /tmp/status.json; echo
+          echo -n 'QUEUE='; jq -c '[.[] | {id,status,attempts,error,source:(.metadata.source // null),createdAt,updatedAt}]' /tmp/messages.json 2>/dev/null || cat /tmp/messages.json; echo
+      - name: Persist probe
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -f docs/gateway-current-status.txt || echo 'Probe did not produce a result.' > docs/gateway-current-status.txt
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/gateway-current-status.txt
+          git diff --cached --quiet || git commit -m 'Record current gateway recovery status'
+          git push origin HEAD:main
