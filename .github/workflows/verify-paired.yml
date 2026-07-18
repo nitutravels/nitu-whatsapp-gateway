@@ -16,7 +16,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Verify paired session and authenticated APIs
+      - name: Verify paired session and inspect recent queue errors
         shell: bash
         env:
           DOMAIN: wa.nitutravels.in
@@ -29,7 +29,7 @@ jobs:
           health_code="$(curl -sS --connect-timeout 10 --max-time 30 -o /tmp/health.json -w '%{http_code}' "https://$DOMAIN/healthz")"
           ready_code="$(curl -sS --connect-timeout 10 --max-time 30 -o /tmp/ready.json -w '%{http_code}' "https://$DOMAIN/readyz")"
           status_code="$(curl -sS --connect-timeout 10 --max-time 30 -H "Authorization: Bearer $ADMIN_TOKEN" -o /tmp/status.json -w '%{http_code}' "https://$DOMAIN/admin/api/status")"
-          messages_code="$(curl -sS --connect-timeout 10 --max-time 30 -H "Authorization: Bearer $ADMIN_TOKEN" -o /tmp/messages.json -w '%{http_code}' "https://$DOMAIN/admin/api/messages?limit=5")"
+          messages_code="$(curl -sS --connect-timeout 10 --max-time 30 -H "Authorization: Bearer $ADMIN_TOKEN" -o /tmp/messages.json -w '%{http_code}' "https://$DOMAIN/admin/api/messages?limit=20")"
 
           echo "HEALTH_HTTP=$health_code"
           echo "READY_HTTP=$ready_code"
@@ -38,7 +38,10 @@ jobs:
           echo -n 'HEALTH_BODY='; jq -c . /tmp/health.json 2>/dev/null || cat /tmp/health.json; echo
           echo -n 'READY_BODY='; jq -c . /tmp/ready.json 2>/dev/null || cat /tmp/ready.json; echo
           echo -n 'ADMIN_STATUS_BODY='; jq -c . /tmp/status.json 2>/dev/null || cat /tmp/status.json; echo
-          echo -n 'QUEUE_SUMMARY='; jq -c '{type:(type),count:(if type=="array" then length else null end),sampleStatuses:(if type=="array" then [.[].status] | unique else [] end)}' /tmp/messages.json 2>/dev/null || echo '{"parse":"failed"}'; echo
+          echo -n 'QUEUE_SUMMARY='; jq -c '{type:(type),count:(if type=="array" then length else null end),statuses:(if type=="array" then [.[].status] | group_by(.) | map({status:.[0],count:length}) else [] end)}' /tmp/messages.json 2>/dev/null || echo '{"parse":"failed"}'; echo
+          echo 'RECENT_QUEUE_RECORDS_BEGIN'
+          jq -c 'if type=="array" then .[] | {id,status,attempts,error,createdAt,updatedAt,scheduledAt,nextAttemptAt,to:(.to | tostring | sub("^(.{4}).*(.{4})$";"\\1****\\2")),source:(.metadata.source // null)} else . end' /tmp/messages.json 2>/dev/null || cat /tmp/messages.json
+          echo 'RECENT_QUEUE_RECORDS_END'
 
           ready_value="$(jq -r '.ready // false' /tmp/ready.json 2>/dev/null || echo false)"
           gateway_ready="$(jq -r '.ready // false' /tmp/status.json 2>/dev/null || echo false)"
@@ -64,5 +67,5 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add docs/gateway-paired-verification.txt
-          git diff --cached --quiet || git commit -m 'Record paired WhatsApp gateway verification'
+          git diff --cached --quiet || git commit -m 'Record WhatsApp queue error diagnosis'
           git push origin HEAD:main
