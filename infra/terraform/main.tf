@@ -13,8 +13,8 @@ data "oci_core_images" "ubuntu" {
 
 locals {
   availability_domain = data.oci_identity_availability_domains.ads.availability_domains[var.availability_domain_index].name
-  site_address         = trimspace(var.gateway_domain) != "" ? trimspace(var.gateway_domain) : ":80"
-  public_base_url      = trimspace(var.gateway_domain) != "" ? "https://${trimspace(var.gateway_domain)}" : ""
+  site_address        = trimspace(var.gateway_domain) != "" ? trimspace(var.gateway_domain) : ":80"
+  public_base_url     = trimspace(var.gateway_domain) != "" ? "https://${trimspace(var.gateway_domain)}" : ""
   env_file = join("\n", [
     "GATEWAY_IMAGE=${var.gateway_image}",
     "SITE_ADDRESS=${local.site_address}",
