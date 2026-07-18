@@ -1,0 +1,159 @@
+name: Priority WhatsApp gateway recovery
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/force-gateway-recovery.yml']
+
+permissions:
+  contents: write
+  packages: read
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Configure OCI credentials
+        shell: bash
+        env:
+          OCI_PRIVATE_KEY_PEM: ${{ secrets.OCI_PRIVATE_KEY }}
+          OCI_FINGERPRINT_VALUE: ${{ secrets.OCI_FINGERPRINT }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$HOME/.oci"
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          value = os.environ.get('OCI_PRIVATE_KEY_PEM', '').strip()
+          if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+              value = value[1:-1]
+          if '\\n' in value and '\n' not in value:
+              value = value.replace('\\r', '').replace('\\n', '\n')
+          Path.home().joinpath('.oci/key.pem').write_text(value.replace('\r', '').strip() + '\n', encoding='utf-8')
+          PY
+          chmod 600 "$HOME/.oci/key.pem"
+          fingerprint="$(printf '%s' "$OCI_FINGERPRINT_VALUE" | tr -d '[:space:]')"
+          cat > "$HOME/.oci/config" <<EOF
+          [DEFAULT]
+          user=${{ secrets.OCI_USER_OCID }}
+          fingerprint=$fingerprint
+          tenancy=${{ secrets.OCI_TENANCY_OCID }}
+          region=${{ vars.OCI_REGION }}
+          key_file=$HOME/.oci/key.pem
+          EOF
+          chmod 600 "$HOME/.oci/config"
+
+      - name: Install OCI CLI
+        run: pipx install --quiet oci-cli
+
+      - name: Install exact image and verify readiness
+        shell: bash
+        env:
+          COMPARTMENT_OCID: ${{ vars.OCI_COMPARTMENT_OCID }}
+          DOMAIN: wa.nitutravels.in
+          ADMIN_TOKEN: ${{ secrets.GATEWAY_ADMIN_TOKEN }}
+          IMAGE: ghcr.io/${{ github.repository }}:${{ github.sha }}
+        run: |
+          set -Eeuo pipefail
+          exec > >(tee docs/priority-gateway-recovery-result.txt) 2>&1
+          echo 'PRIORITY_GATEWAY_RECOVERY_BEGIN'
+          instance_id="$(oci compute instance list \
+            --compartment-id "$COMPARTMENT_OCID" \
+            --display-name nitu-whatsapp-gateway \
+            --all \
+            --query 'data[?"lifecycle-state"==`RUNNING`].id | [0]' \
+            --raw-output)"
+          if [[ ! "$instance_id" =~ ^ocid1\.instance\. ]]; then
+            echo 'RECOVERY_RESULT=failed'
+            echo 'ERROR=Running gateway instance was not found.'
+            exit 1
+          fi
+
+          cat > /tmp/remote-recover.sh <<REMOTE
+          set -Eeuo pipefail
+          target_image='$IMAGE'
+          cd /opt/nitu-wa
+          for attempt in \$(seq 1 40); do
+            if docker pull "\$target_image" >/tmp/nitu-wa-pull.log 2>&1; then
+              break
+            fi
+            if [ "\$attempt" -eq 40 ]; then
+              cat /tmp/nitu-wa-pull.log >&2
+              exit 21
+            fi
+            sleep 15
+          done
+          docker tag "\$target_image" ghcr.io/nitutravels/nitu-whatsapp-gateway:latest
+          docker compose --env-file .env up -d --force-recreate --no-deps gateway
+          for attempt in \$(seq 1 30); do
+            status=\$(curl -fsS --max-time 10 -H "Authorization: Bearer \$(grep '^ADMIN_TOKEN=' .env | cut -d= -f2-)" http://127.0.0.1:3000/admin/api/status 2>/dev/null | jq -r '.status // empty' || true)
+            [ "\$status" = ready ] && exit 0
+            sleep 10
+          done
+          docker logs --tail 120 nitu-wa-gateway >&2 || true
+          exit 22
+          REMOTE
+          encoded="$(base64 -w0 /tmp/remote-recover.sh)"
+          jq -n --arg text "printf '%s' '$encoded' | base64 -d | bash" '{sourceType:"TEXT",text:$text}' > /tmp/content.json
+          jq -n --arg id "$instance_id" '{instanceId:$id}' > /tmp/target.json
+
+          command_id="$(oci instance-agent command create \
+            --compartment-id "$COMPARTMENT_OCID" \
+            --content file:///tmp/content.json \
+            --target file:///tmp/target.json \
+            --timeout-in-seconds 1200 \
+            --display-name 'Nitu WhatsApp priority recovery' \
+            --query 'data.id' --raw-output)"
+          echo 'INSTANCE_COMMAND_CREATED=yes'
+
+          execution_state=''
+          for attempt in $(seq 1 80); do
+            execution_json="$(oci instance-agent command-execution get --command-id "$command_id" --instance-id "$instance_id" --output json)"
+            execution_state="$(jq -r '.data."lifecycle-state" // empty' <<<"$execution_json")"
+            echo "COMMAND_ATTEMPT=$attempt STATE=$execution_state"
+            case "$execution_state" in
+              SUCCEEDED) break ;;
+              FAILED|CANCELED|TIMED_OUT) echo 'RECOVERY_RESULT=failed'; exit 1 ;;
+            esac
+            sleep 15
+          done
+          [ "$execution_state" = SUCCEEDED ] || { echo 'RECOVERY_RESULT=failed'; echo "ERROR=Command ended in $execution_state"; exit 1; }
+
+          verified=0
+          for attempt in $(seq 1 36); do
+            health_code="$(curl -sS --connect-timeout 10 --max-time 30 -o /tmp/health.json -w '%{http_code}' "https://$DOMAIN/healthz" || echo 000)"
+            ready_code="$(curl -sS --connect-timeout 10 --max-time 30 -o /tmp/ready.json -w '%{http_code}' "https://$DOMAIN/readyz" || echo 000)"
+            status_code="$(curl -sS --connect-timeout 10 --max-time 30 -H "Authorization: Bearer $ADMIN_TOKEN" -o /tmp/status.json -w '%{http_code}' "https://$DOMAIN/admin/api/status" || echo 000)"
+            status="$(jq -r '.status // "unknown"' /tmp/status.json 2>/dev/null || echo unknown)"
+            is_ready="$(jq -r '.ready // false' /tmp/status.json 2>/dev/null || echo false)"
+            last_error="$(jq -r '.lastError // ""' /tmp/status.json 2>/dev/null || true)"
+            echo "VERIFY_ATTEMPT=$attempt HEALTH_HTTP=$health_code READY_HTTP=$ready_code STATUS_HTTP=$status_code STATUS=$status READY=$is_ready LAST_ERROR_PRESENT=$([ -n "$last_error" ] && echo yes || echo no)"
+            if [ "$health_code" = 200 ] && [ "$ready_code" = 200 ] && [ "$status_code" = 200 ] && [ "$status" = ready ] && [ "$is_ready" = true ] && [ -z "$last_error" ]; then
+              verified=1
+              break
+            fi
+            sleep 10
+          done
+          echo -n 'FINAL_STATUS='; jq -c '{status,ready,account,lastError,queue}' /tmp/status.json 2>/dev/null || cat /tmp/status.json; echo
+          if [ "$verified" -eq 1 ]; then
+            echo 'RECOVERY_RESULT=success'
+          else
+            echo 'RECOVERY_RESULT=failed'
+            exit 1
+          fi
+          echo 'PRIORITY_GATEWAY_RECOVERY_END'
+
+      - name: Persist recovery result
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -f docs/priority-gateway-recovery-result.txt || echo 'Recovery did not produce a result file.' > docs/priority-gateway-recovery-result.txt
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/priority-gateway-recovery-result.txt
+          git diff --cached --quiet || git commit -m 'Record priority WhatsApp recovery result'
+          git push origin HEAD:main
