@@ -16,13 +16,19 @@ jobs:
         with:
           terraform_version: 1.15.8
           terraform_wrapper: false
-      - name: Show canonical Terraform formatting
+      - name: Format and validate Terraform
         shell: bash
         run: |
           set +e
           mkdir -p /tmp/src
-          curl -fsSL 'https://github.com/nitutravels/nitu-whatsapp-gateway/archive/4ae0e3bc31dbccefadb43d93a0f24e9e66e1c289.tar.gz' | tar -xz -C /tmp/src --strip-components=1
+          curl -fsSL 'https://github.com/nitutravels/nitu-whatsapp-gateway/archive/5a772d257fb505f75a6f6f1eea55a1d12914d2ad.tar.gz' | tar -xz -C /tmp/src --strip-components=1
           cd /tmp/src/infra/terraform
-          terraform fmt -check -diff -recursive -no-color
+          terraform fmt -check -recursive -no-color
           echo "fmt_exit=$?"
+          terraform init -backend=false -no-color >/tmp/init.log 2>&1
+          echo "provider_init_exit=$?"
+          tail -n 15 /tmp/init.log
+          terraform validate -no-color >/tmp/validate.log 2>&1
+          echo "validate_exit=$?"
+          tail -n 40 /tmp/validate.log
           exit 1
