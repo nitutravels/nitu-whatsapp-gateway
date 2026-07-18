@@ -1,5 +1,6 @@
 name: Verify Chromium profile recovery
 
+# Trigger live recovery check after the repaired image was published.
 on:
   push:
     branches: [main]
