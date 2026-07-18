@@ -58,7 +58,7 @@ variable "gateway_domain" {
   description = "Required DNS name such as wa.nitutravels.in. Caddy obtains and renews HTTPS automatically after DNS points to the reserved IP."
   type        = string
   validation {
-    condition     = can(regex("^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$", var.gateway_domain))
+    condition     = can(regex("^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$", var.gateway_domain))
     error_message = "gateway_domain must be a valid fully-qualified domain name, for example wa.nitutravels.in."
   }
 }
