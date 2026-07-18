@@ -3,8 +3,7 @@ name: Verify Oracle deployment state
 on:
   push:
     branches: [deployment-state-check]
-    paths:
-      - '.github/workflows/deployment-state-check.yml'
+    paths: ['.github/workflows/deployment-state-check.yml']
 
 permissions:
   contents: read
@@ -17,85 +16,36 @@ jobs:
       - uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: 1.15.8
-      - name: Configure OCI credentials
+          terraform_wrapper: false
+      - name: Read remote Terraform outputs
         shell: bash
         env:
-          OCI_PRIVATE_KEY_PEM: ${{ secrets.OCI_PRIVATE_KEY }}
-          OCI_FINGERPRINT_VALUE: ${{ secrets.OCI_FINGERPRINT }}
-        run: |
-          set -Eeuo pipefail
-          mkdir -p "$HOME/.oci" /tmp/tf
-          python - <<'PY'
-          import os
-          from pathlib import Path
-          value = os.environ.get('OCI_PRIVATE_KEY_PEM', '').strip()
-          if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
-              value = value[1:-1]
-          if '\\n' in value and '\n' not in value:
-              value = value.replace('\\r', '').replace('\\n', '\n')
-          Path.home().joinpath('.oci/oci_api_key.pem').write_text(value.replace('\r', '').strip() + '\n', encoding='utf-8')
-          PY
-          chmod 600 "$HOME/.oci/oci_api_key.pem"
-          FINGERPRINT="$(printf '%s' "$OCI_FINGERPRINT_VALUE" | tr -d '[:space:]')"
-          cat > "$HOME/.oci/config" <<EOF
-          [DEFAULT]
-          user=${{ secrets.OCI_USER_OCID }}
-          fingerprint=$FINGERPRINT
-          tenancy=${{ secrets.OCI_TENANCY_OCID }}
-          region=${{ vars.OCI_REGION }}
-          key_file=$HOME/.oci/oci_api_key.pem
-          EOF
-          chmod 600 "$HOME/.oci/config"
-      - name: Read state and verify Oracle resources
-        shell: bash
-        env:
-          STATE_BUCKET: ${{ vars.OCI_TF_STATE_BUCKET }}
-          OCI_NAMESPACE_VALUE: ${{ vars.OCI_NAMESPACE }}
-          COMPARTMENT_OCID: ${{ vars.OCI_COMPARTMENT_OCID }}
-          DOMAIN: ${{ vars.GATEWAY_DOMAIN }}
+          KEY: ${{ secrets.OCI_PRIVATE_KEY }}
+          FP: ${{ secrets.OCI_FINGERPRINT }}
+          BUCKET: ${{ vars.OCI_TF_STATE_BUCKET }}
+          NS: ${{ vars.OCI_NAMESPACE }}
         run: |
           set +e
-          cat > /tmp/tf/main.tf <<'EOF'
-          terraform {
-            backend "oci" {}
-          }
-          EOF
+          mkdir -p "$HOME/.oci" /tmp/tf
+          printf '%s\n' "$KEY" > "$HOME/.oci/key.pem"
+          chmod 600 "$HOME/.oci/key.pem"
+          FP="$(printf '%s' "$FP" | tr -d '[:space:]')"
+          printf '[DEFAULT]\nuser=%s\nfingerprint=%s\ntenancy=%s\nregion=%s\nkey_file=%s/.oci/key.pem\n' '${{ secrets.OCI_USER_OCID }}' "$FP" '${{ secrets.OCI_TENANCY_OCID }}' '${{ vars.OCI_REGION }}' "$HOME" > "$HOME/.oci/config"
+          chmod 600 "$HOME/.oci/config"
+          printf 'terraform {\n  backend "oci" {}\n}\n' > /tmp/tf/main.tf
           cd /tmp/tf
-          terraform init -reconfigure -no-color \
-            -backend-config="bucket=$STATE_BUCKET" \
-            -backend-config="namespace=$OCI_NAMESPACE_VALUE" \
-            -backend-config="region=${{ vars.OCI_REGION }}" \
-            -backend-config="key=nitu-whatsapp-gateway/terraform.tfstate" \
-            -backend-config="auth=APIKey" \
-            -backend-config="config_file_profile=DEFAULT" >/tmp/init.log 2>&1
-          INIT_RC=$?
-          echo "terraform_init_exit=$INIT_RC"
-          if [ "$INIT_RC" -ne 0 ]; then tail -n 30 /tmp/init.log; fi
-
-          terraform output -json > /tmp/outputs.json 2>/tmp/output.err
-          OUTPUT_RC=$?
-          echo "terraform_output_exit=$OUTPUT_RC"
-          if [ "$OUTPUT_RC" -eq 0 ]; then
-            echo "public_ip=$(jq -r '.public_ip.value // empty' /tmp/outputs.json)"
-            echo "dashboard_url=$(jq -r '.dashboard_url.value // empty' /tmp/outputs.json)"
-            echo "health_url=$(jq -r '.health_url.value // empty' /tmp/outputs.json)"
+          terraform init -reconfigure -no-color -backend-config="bucket=$BUCKET" -backend-config="namespace=$NS" -backend-config="region=${{ vars.OCI_REGION }}" -backend-config="key=nitu-whatsapp-gateway/terraform.tfstate" -backend-config="auth=APIKey" -backend-config="config_file_profile=DEFAULT" >/dev/null 2>/tmp/init.err
+          echo "init_exit=$?"
+          terraform output -json >/tmp/o.json 2>/tmp/out.err
+          RC=$?
+          echo "output_exit=$RC"
+          if [ "$RC" -eq 0 ]; then
+            echo "public_ip=$(jq -r '.public_ip.value // empty' /tmp/o.json)"
+            echo "dashboard_url=$(jq -r '.dashboard_url.value // empty' /tmp/o.json)"
+            echo "health_url=$(jq -r '.health_url.value // empty' /tmp/o.json)"
+            echo "instance_id_present=$(jq -r 'if (.instance_id.value // "") != "" then "yes" else "no" end' /tmp/o.json)"
           else
-            tail -n 20 /tmp/output.err
+            tail -n 8 /tmp/init.err
+            tail -n 8 /tmp/out.err
           fi
-
-          pipx install --quiet oci-cli
-          INSTANCE_STATE="$(oci compute instance list --compartment-id "$COMPARTMENT_OCID" --display-name nitu-whatsapp-gateway --all --query 'data[0]."lifecycle-state"' --raw-output 2>/tmp/instance.err)"
-          INSTANCE_RC=$?
-          echo "instance_query_exit=$INSTANCE_RC"
-          echo "instance_state=$INSTANCE_STATE"
-          if [ "$INSTANCE_RC" -ne 0 ]; then tail -n 15 /tmp/instance.err; fi
-
-          DNS_IP="$(getent ahostsv4 "$DOMAIN" 2>/dev/null | awk 'NR==1{print $1}')"
-          echo "dns_ip=$DNS_IP"
-          HEALTH_BODY="$(curl -fsS --max-time 15 "https://$DOMAIN/healthz" 2>/tmp/health.err)"
-          HEALTH_RC=$?
-          echo "health_check_exit=$HEALTH_RC"
-          if [ "$HEALTH_RC" -eq 0 ]; then echo "health_body=$HEALTH_BODY"; else tail -n 5 /tmp/health.err; fi
-
-          echo 'Verification report complete; workflow intentionally exits non-zero for retrieval.'
           exit 1
