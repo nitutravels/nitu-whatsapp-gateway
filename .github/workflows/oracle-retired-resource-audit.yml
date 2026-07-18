@@ -1,4 +1,4 @@
-name: Retire obsolete NAMS Oracle instance
+name: Verify Oracle resources after NAMS retirement
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  retire:
+  verify:
     runs-on: ubuntu-latest
     environment: production
     steps:
@@ -47,145 +47,97 @@ jobs:
           EOF
           chmod 600 "$HOME/.oci/config"
 
-      - name: Terminate verified retired NAMS resources
+      - name: Verify compute, volumes and reserved IPs
         shell: bash
         env:
           TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
-          TARGET_PUBLIC_IP: '161.118.187.93'
-          TARGET_NAME: 'nams-phase1'
-          TARGET_SHAPE: 'VM.Standard.E2.1.Micro'
+          GATEWAY_COMPARTMENT_OCID: ${{ vars.OCI_COMPARTMENT_OCID }}
+          OLD_PUBLIC_IP: '161.118.187.93'
         run: |
           set -Eeuo pipefail
-          exec > >(tee oracle-retirement-result.txt) 2>&1
+          exec > >(tee oracle-post-retirement-verification.txt) 2>&1
           pipx install --quiet oci-cli
-          echo 'ORACLE_NAMS_RETIREMENT_BEGIN'
+          echo 'ORACLE_POST_RETIREMENT_VERIFICATION_BEGIN'
 
-          compartments_file="$(mktemp)"
-          matches_file="$(mktemp)"
-          printf '%s\t%s\n' "$TENANCY_OCID" 'ROOT_TENANCY' > "$compartments_file"
-          oci iam compartment list \
-            --compartment-id "$TENANCY_OCID" \
-            --compartment-id-in-subtree true \
-            --access-level ANY \
-            --all \
-            --query 'data[?"lifecycle-state"==`ACTIVE`].[id,name]' \
-            --output json | jq -r '.[] | @tsv' >> "$compartments_file"
+          old_instance_count=0
+          old_boot_volume_count=0
+          gateway_instance_count=0
+          gateway_public_ip=''
+
+          printf '%s\t%s\n%s\t%s\n' "$TENANCY_OCID" 'ROOT_TENANCY' "$GATEWAY_COMPARTMENT_OCID" 'NituWAGateway' > /tmp/compartments.tsv
 
           while IFS=$'\t' read -r compartment_id compartment_name; do
-            [ -n "$compartment_id" ] || continue
-            instances_json="$(oci compute instance list --compartment-id "$compartment_id" --all --output json 2>/dev/null || printf '{"data":[]}')"
+            instances_json="$(oci compute instance list --compartment-id "$compartment_id" --all --output json)"
             while IFS= read -r instance; do
               [ -n "$instance" ] || continue
               instance_id="$(jq -r '.id' <<<"$instance")"
               display_name="$(jq -r '."display-name"' <<<"$instance")"
               state="$(jq -r '."lifecycle-state"' <<<"$instance")"
               shape="$(jq -r '.shape' <<<"$instance")"
-              ad="$(jq -r '."availability-domain"' <<<"$instance")"
-              vnic_json="$(oci compute vnic-attachment list --compartment-id "$compartment_id" --instance-id "$instance_id" --all --output json 2>/dev/null || printf '{"data":[]}')"
+              ocpus="$(jq -r '."shape-config".ocpus // ""' <<<"$instance")"
+              memory="$(jq -r '."shape-config"."memory-in-gbs" // ""' <<<"$instance")"
               public_ip=''
+              vnic_json="$(oci compute vnic-attachment list --compartment-id "$compartment_id" --instance-id "$instance_id" --all --output json 2>/dev/null || printf '{"data":[]}')"
               while IFS= read -r vnic_id; do
                 [ -n "$vnic_id" ] || continue
                 candidate="$(oci network vnic get --vnic-id "$vnic_id" --query 'data."public-ip"' --raw-output 2>/dev/null || true)"
                 if [ -n "$candidate" ] && [ "$candidate" != 'null' ]; then public_ip="$candidate"; break; fi
               done < <(jq -r '.data[]? | ."vnic-id"' <<<"$vnic_json")
-              if [ "$public_ip" = "$TARGET_PUBLIC_IP" ]; then
-                printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$instance_id" "$compartment_id" "$compartment_name" "$display_name" "$shape" "$state" "$ad" >> "$matches_file"
+              echo "INSTANCE compartment=$compartment_name name=$display_name state=$state shape=$shape ocpus=$ocpus memory_gb=$memory public_ip=${public_ip:-none}"
+              if [ "$display_name" = 'nams-phase1' ] || [ "$public_ip" = "$OLD_PUBLIC_IP" ]; then
+                old_instance_count=$((old_instance_count + 1))
+              fi
+              if [ "$display_name" = 'nitu-whatsapp-gateway' ] && [ "$state" != 'TERMINATED' ]; then
+                gateway_instance_count=$((gateway_instance_count + 1))
+                gateway_public_ip="$public_ip"
               fi
             done < <(jq -c '.data[]? | select(."lifecycle-state" != "TERMINATED")' <<<"$instances_json")
-          done < "$compartments_file"
+          done < /tmp/compartments.tsv
 
-          match_count="$(wc -l < "$matches_file" | tr -d ' ')"
-          if [ "$match_count" != '1' ]; then
-            echo "RETIREMENT_STATUS=blocked"
-            echo "ERROR=Expected exactly one active instance at $TARGET_PUBLIC_IP; found $match_count."
-            exit 1
-          fi
-
-          IFS=$'\t' read -r instance_id compartment_id compartment_name display_name shape state ad < "$matches_file"
-          if [ "$compartment_id" != "$TENANCY_OCID" ] || [ "$compartment_name" != 'ROOT_TENANCY' ] || [ "$display_name" != "$TARGET_NAME" ] || [ "$shape" != "$TARGET_SHAPE" ]; then
-            echo 'RETIREMENT_STATUS=blocked'
-            echo 'ERROR=Matched resource failed the approved root-compartment, name, or shape guardrail.'
-            exit 1
-          fi
-
-          echo "MATCHED_INSTANCE_NAME=$display_name"
-          echo "MATCHED_INSTANCE_SHAPE=$shape"
-          echo "MATCHED_INSTANCE_STATE=$state"
-          echo "MATCHED_PUBLIC_IP=$TARGET_PUBLIC_IP"
-
-          boot_json="$(oci compute boot-volume-attachment list --availability-domain "$ad" --compartment-id "$compartment_id" --instance-id "$instance_id" --all --output json)"
-          mapfile -t boot_volume_ids < <(jq -r '.data[]? | select(."lifecycle-state" != "TERMINATED") | ."boot-volume-id"' <<<"$boot_json")
-          echo "BOOT_VOLUME_COUNT=${#boot_volume_ids[@]}"
-
-          public_ip_id=''
-          public_ip_lifetime=''
-          if public_ip_json="$(oci network public-ip get --public-ip-address "$TARGET_PUBLIC_IP" --output json 2>/dev/null)"; then
-            public_ip_id="$(jq -r '.data.id // empty' <<<"$public_ip_json")"
-            public_ip_lifetime="$(jq -r '.data.lifetime // empty' <<<"$public_ip_json")"
-          fi
-          echo "PUBLIC_IP_LIFETIME=${public_ip_lifetime:-UNKNOWN}"
-
-          oci compute instance terminate \
-            --instance-id "$instance_id" \
-            --preserve-boot-volume false \
-            --preserve-data-volumes-created-at-launch false \
-            --force \
-            --wait-for-state SUCCEEDED \
-            --max-wait-seconds 900 >/dev/null
-
-          if [ "$public_ip_lifetime" = 'RESERVED' ] && [ -n "$public_ip_id" ]; then
-            oci network public-ip delete --public-ip-id "$public_ip_id" --force >/dev/null
-          fi
-
-          for boot_volume_id in "${boot_volume_ids[@]}"; do
-            for attempt in $(seq 1 12); do
-              if ! oci bv boot-volume get --boot-volume-id "$boot_volume_id" >/tmp/boot-volume.json 2>/dev/null; then
-                break
+          ad="$(oci iam availability-domain list --compartment-id "$TENANCY_OCID" --query 'data[0].name' --raw-output)"
+          while IFS=$'\t' read -r compartment_id compartment_name; do
+            volumes_json="$(oci bv boot-volume list --availability-domain "$ad" --compartment-id "$compartment_id" --all --output json)"
+            while IFS= read -r volume; do
+              [ -n "$volume" ] || continue
+              volume_name="$(jq -r '."display-name"' <<<"$volume")"
+              volume_state="$(jq -r '."lifecycle-state"' <<<"$volume")"
+              volume_size="$(jq -r '."size-in-gbs"' <<<"$volume")"
+              echo "BOOT_VOLUME compartment=$compartment_name name=$volume_name state=$volume_state size_gb=$volume_size"
+              if [ "$volume_name" = 'nams-phase1 (Boot Volume)' ] && [ "$volume_state" != 'TERMINATED' ]; then
+                old_boot_volume_count=$((old_boot_volume_count + 1))
               fi
-              volume_state="$(jq -r '.data."lifecycle-state" // empty' /tmp/boot-volume.json)"
-              if [ "$volume_state" = 'TERMINATED' ] || [ "$volume_state" = 'TERMINATING' ]; then
-                break
-              fi
-              if [ "$attempt" = '12' ]; then
-                oci bv boot-volume delete --boot-volume-id "$boot_volume_id" --force >/dev/null
-              else
-                sleep 10
-              fi
-            done
-          done
+            done < <(jq -c '.data[]?' <<<"$volumes_json")
+          done < /tmp/compartments.tsv
 
-          sleep 15
-          if current_state="$(oci compute instance get --instance-id "$instance_id" --query 'data."lifecycle-state"' --raw-output 2>/dev/null)"; then
-            if [ "$current_state" != 'TERMINATED' ]; then
-              echo "RETIREMENT_STATUS=failed"
-              echo "ERROR=Instance remains in state $current_state."
-              exit 1
-            fi
+          reserved_json="$(oci network public-ip list --compartment-id "$GATEWAY_COMPARTMENT_OCID" --lifetime RESERVED --scope REGION --all --output json)"
+          while IFS= read -r public_ip; do
+            [ -n "$public_ip" ] || continue
+            address="$(jq -r '."ip-address"' <<<"$public_ip")"
+            name="$(jq -r '."display-name"' <<<"$public_ip")"
+            state="$(jq -r '."lifecycle-state"' <<<"$public_ip")"
+            echo "RESERVED_PUBLIC_IP name=$name address=$address state=$state"
+            if [ "$name" = 'nitu-wa-gateway-reserved-ip' ]; then gateway_public_ip="$address"; fi
+          done < <(jq -c '.data[]?' <<<"$reserved_json")
+
+          echo "OLD_INSTANCE_COUNT=$old_instance_count"
+          echo "OLD_BOOT_VOLUME_COUNT=$old_boot_volume_count"
+          echo "GATEWAY_INSTANCE_COUNT=$gateway_instance_count"
+          echo "GATEWAY_PUBLIC_IP=${gateway_public_ip:-none}"
+          if [ "$old_instance_count" -eq 0 ] && [ "$old_boot_volume_count" -eq 0 ]; then
+            echo 'NAMS_RETIREMENT_VERIFIED=yes'
+          else
+            echo 'NAMS_RETIREMENT_VERIFIED=no'
           fi
+          echo 'ORACLE_POST_RETIREMENT_VERIFICATION_END'
 
-          if oci network public-ip get --public-ip-address "$TARGET_PUBLIC_IP" >/tmp/public-ip-after.json 2>/dev/null; then
-            remaining_lifetime="$(jq -r '.data.lifetime // empty' /tmp/public-ip-after.json)"
-            if [ "$remaining_lifetime" = 'RESERVED' ]; then
-              echo 'RETIREMENT_STATUS=failed'
-              echo 'ERROR=Reserved public IP still exists after deletion.'
-              exit 1
-            fi
-          fi
-
-          echo 'RETIREMENT_STATUS=success'
-          echo "RETIRED_INSTANCE=$display_name"
-          echo "RETIRED_PUBLIC_IP=$TARGET_PUBLIC_IP"
-          echo 'BOOT_VOLUME_DELETION_REQUESTED=yes'
-          echo 'ORACLE_NAMS_RETIREMENT_END'
-
-      - name: Persist retirement result
+      - name: Persist verification result
         if: always()
         shell: bash
         run: |
           set -Eeuo pipefail
-          test -f oracle-retirement-result.txt || echo 'Retirement workflow did not produce a result file.' > oracle-retirement-result.txt
+          test -f oracle-post-retirement-verification.txt || echo 'Verification did not produce a result file.' > oracle-post-retirement-verification.txt
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add oracle-retirement-result.txt
-          git diff --cached --quiet || git commit -m 'Record NAMS Oracle retirement result'
+          git add oracle-post-retirement-verification.txt
+          git diff --cached --quiet || git commit -m 'Record post-retirement Oracle verification'
           git push origin HEAD:oracle-resource-audit
