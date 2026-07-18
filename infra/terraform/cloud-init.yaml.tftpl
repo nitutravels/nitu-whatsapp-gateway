@@ -26,7 +26,7 @@ write_files:
           container_name: nitu-wa-gateway
           restart: unless-stopped
           init: true
-          shm_size: "1gb"
+          shm_size: "256mb"
           environment:
             PORT: "3000"
             DATA_DIR: /data
@@ -41,6 +41,7 @@ write_files:
             PUBLIC_BASE_URL: $${PUBLIC_BASE_URL:-}
             LOG_LEVEL: $${LOG_LEVEL:-info}
             CHROME_PATH: /usr/bin/chromium
+            NODE_OPTIONS: "--max-old-space-size=256"
           volumes:
             - ./data:/data
           networks: [gateway_net]
@@ -90,7 +91,6 @@ write_files:
           format json
         }
       }
-
 
   - path: /usr/local/sbin/nitu-wa-sync-config
     owner: root:root
@@ -152,7 +152,6 @@ write_files:
       fi
       tar --ignore-failed-read -czf "/opt/nitu-wa/backups/auth-$${ts}.tar.gz" -C /opt/nitu-wa/data auth 2>/dev/null || true
       find /opt/nitu-wa/backups -type f -mtime +7 -delete
-
 
   - path: /etc/systemd/system/nitu-wa-metadata-guard.service
     permissions: '0644'
@@ -230,7 +229,7 @@ write_files:
     permissions: '0644'
     content: |
       [Unit]
-      Description=Daily Nitu WhatsApp Gateway backup
+      Description=Daily Nitu WhatsApp Gateway state backup
       [Timer]
       OnCalendar=*-*-* 02:30:00 UTC
       RandomizedDelaySec=300
@@ -239,6 +238,12 @@ write_files:
       WantedBy=timers.target
 
 runcmd:
+  - test -f /swapfile || fallocate -l 4G /swapfile
+  - chmod 600 /swapfile
+  - mkswap /swapfile
+  - swapon /swapfile
+  - grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+  - sysctl -w vm.swappiness=20
   - install -m 0755 -d /etc/apt/keyrings
   - curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
   - chmod a+r /etc/apt/keyrings/docker.asc
