@@ -33,7 +33,11 @@ jobs:
           printf '[DEFAULT]\nuser=%s\nfingerprint=%s\ntenancy=%s\nregion=%s\nkey_file=%s/.oci/oci_api_key.pem\n' \
             '${{ secrets.OCI_USER_OCID }}' "$FINGERPRINT" '${{ secrets.OCI_TENANCY_OCID }}' '${{ vars.OCI_REGION }}' "$HOME" > "$HOME/.oci/config"
           chmod 600 "$HOME/.oci/config"
-          printf 'terraform { backend "oci" {} }\n' > /tmp/tf/main.tf
+          cat > /tmp/tf/main.tf <<'EOF'
+          terraform {
+            backend "oci" {}
+          }
+          EOF
           cd /tmp/tf
           terraform init -reconfigure -no-color \
             -backend-config="bucket=$STATE_BUCKET" \
