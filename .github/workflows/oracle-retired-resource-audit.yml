@@ -1,0 +1,116 @@
+name: Audit retired Oracle resources
+
+on:
+  push:
+    branches: [oracle-resource-audit]
+    paths: ['.github/workflows/oracle-retired-resource-audit.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Configure OCI credentials
+        shell: bash
+        env:
+          OCI_PRIVATE_KEY_PEM: ${{ secrets.OCI_PRIVATE_KEY }}
+          OCI_FINGERPRINT_VALUE: ${{ secrets.OCI_FINGERPRINT }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$HOME/.oci"
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          value = os.environ.get('OCI_PRIVATE_KEY_PEM', '').strip()
+          if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+              value = value[1:-1]
+          if '\\n' in value and '\n' not in value:
+              value = value.replace('\\r', '').replace('\\n', '\n')
+          Path.home().joinpath('.oci/key.pem').write_text(value.replace('\r', '').strip() + '\n', encoding='utf-8')
+          PY
+          chmod 600 "$HOME/.oci/key.pem"
+          FINGERPRINT="$(printf '%s' "$OCI_FINGERPRINT_VALUE" | tr -d '[:space:]')"
+          cat > "$HOME/.oci/config" <<EOF
+          [DEFAULT]
+          user=${{ secrets.OCI_USER_OCID }}
+          fingerprint=$FINGERPRINT
+          tenancy=${{ secrets.OCI_TENANCY_OCID }}
+          region=${{ vars.OCI_REGION }}
+          key_file=$HOME/.oci/key.pem
+          EOF
+          chmod 600 "$HOME/.oci/config"
+
+      - name: Identify retired NAMS instance
+        shell: bash
+        env:
+          TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
+          TARGET_PUBLIC_IP: '161.118.187.93'
+        run: |
+          set -Eeuo pipefail
+          pipx install --quiet oci-cli
+          echo 'ORACLE_INSTANCE_AUDIT_BEGIN'
+
+          compartments_file="$(mktemp)"
+          printf '%s\t%s\n' "$TENANCY_OCID" 'ROOT_TENANCY' > "$compartments_file"
+          oci iam compartment list \
+            --compartment-id "$TENANCY_OCID" \
+            --compartment-id-in-subtree true \
+            --access-level ANY \
+            --all \
+            --query 'data[?"lifecycle-state"==`ACTIVE`].[id,name]' \
+            --output json | jq -r '.[] | @tsv' >> "$compartments_file"
+
+          found=0
+          while IFS=$'\t' read -r compartment_id compartment_name; do
+            [ -n "$compartment_id" ] || continue
+            instances_json="$(oci compute instance list --compartment-id "$compartment_id" --all --output json 2>/dev/null || printf '{"data":[]}')"
+            while IFS= read -r instance; do
+              [ -n "$instance" ] || continue
+              instance_id="$(jq -r '.id' <<<"$instance")"
+              display_name="$(jq -r '."display-name"' <<<"$instance")"
+              state="$(jq -r '."lifecycle-state"' <<<"$instance")"
+              shape="$(jq -r '.shape' <<<"$instance")"
+              ad="$(jq -r '."availability-domain"' <<<"$instance")"
+              created="$(jq -r '."time-created"' <<<"$instance")"
+              ocpus="$(jq -r '."shape-config".ocpus // ""' <<<"$instance")"
+              memory="$(jq -r '."shape-config"."memory-in-gbs" // ""' <<<"$instance")"
+
+              public_ip=''
+              vnic_ids="$(oci compute vnic-attachment list --compartment-id "$compartment_id" --instance-id "$instance_id" --all --query 'data[]."vnic-id"' --raw-output 2>/dev/null | tr -d '[]",' || true)"
+              for vnic_id in $vnic_ids; do
+                candidate="$(oci network vnic get --vnic-id "$vnic_id" --query 'data."public-ip"' --raw-output 2>/dev/null || true)"
+                if [ -n "$candidate" ] && [ "$candidate" != 'null' ]; then public_ip="$candidate"; break; fi
+              done
+
+              printf 'INSTANCE compartment=%q name=%q state=%q shape=%q ocpus=%q memory_gb=%q public_ip=%q ad=%q created=%q\n' \
+                "$compartment_name" "$display_name" "$state" "$shape" "$ocpus" "$memory" "$public_ip" "$ad" "$created"
+
+              if [ "$public_ip" = "$TARGET_PUBLIC_IP" ]; then
+                found=1
+                echo "TARGET_MATCH=yes"
+                echo "TARGET_COMPARTMENT=$compartment_name"
+                echo "TARGET_INSTANCE_NAME=$display_name"
+                echo "TARGET_INSTANCE_STATE=$state"
+                echo "TARGET_INSTANCE_SHAPE=$shape"
+                echo "TARGET_OCPUS=$ocpus"
+                echo "TARGET_MEMORY_GB=$memory"
+                echo "TARGET_PUBLIC_IP=$public_ip"
+                echo "TARGET_CREATED=$created"
+                boot_json="$(oci compute boot-volume-attachment list --availability-domain "$ad" --compartment-id "$compartment_id" --instance-id "$instance_id" --all --output json 2>/dev/null || printf '{"data":[]}')"
+                boot_ids="$(jq -r '.data[] | select(."lifecycle-state" != "TERMINATED") | ."boot-volume-id"' <<<"$boot_json")"
+                for boot_id in $boot_ids; do
+                  oci bv boot-volume get --boot-volume-id "$boot_id" --query 'data.{name:"display-name",size_gb:"size-in-gbs",state:"lifecycle-state"}' --output json 2>/dev/null || true
+                done
+              fi
+            done < <(jq -c '.data[] | select(."lifecycle-state" != "TERMINATED")' <<<"$instances_json")
+          done < "$compartments_file"
+
+          echo "TARGET_FOUND=$found"
+          echo 'ORACLE_INSTANCE_AUDIT_END'
+          if [ "$found" -ne 1 ]; then
+            echo '::error::Retired NAMS instance was not uniquely matched by public IP 161.118.187.93.'
+            exit 1
+          fi
