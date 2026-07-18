@@ -1,10 +1,49 @@
 const fs = require('node:fs');
+const path = require('node:path');
 const { Client, LocalAuth, MessageMedia, MessageAck } = require('whatsapp-web.js');
 const QRCode = require('qrcode');
 const config = require('./config');
 const db = require('./db');
 const { emitWebhook } = require('./webhook');
 const { validateMediaUrl } = require('./security');
+
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+function removeStaleChromiumProfileLocks(authPath, logger) {
+  const sessionRoot = path.join(authPath, 'session-primary');
+  if (!fs.existsSync(sessionRoot)) return [];
+
+  const removed = [];
+  const pending = [sessionRoot];
+  while (pending.length) {
+    const directory = pending.pop();
+    let entries = [];
+    try {
+      entries = fs.readdirSync(directory, { withFileTypes: true });
+    } catch (error) {
+      logger?.warn?.({ err: error, directory }, 'Unable to inspect Chromium profile directory');
+      continue;
+    }
+
+    for (const entry of entries) {
+      const target = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        pending.push(target);
+        continue;
+      }
+      if (!/^Singleton(?:Lock|Cookie|Socket)$/.test(entry.name)) continue;
+      try {
+        fs.rmSync(target, { recursive: true, force: true });
+        removed.push(target);
+      } catch (error) {
+        logger?.warn?.({ err: error, target }, 'Unable to remove stale Chromium profile lock');
+      }
+    }
+  }
+
+  if (removed.length) logger?.warn?.({ removed }, 'Removed stale Chromium profile locks before launch');
+  return removed;
+}
 
 class WhatsAppGateway {
   constructor(logger) {
@@ -21,6 +60,11 @@ class WhatsAppGateway {
     this.suppressRestart = false;
     this.restartTimer = null;
     this.lastRecoveryAt = 0;
+  }
+
+  prepareProfileForLaunch() {
+    fs.mkdirSync(config.AUTH_PATH, { recursive: true });
+    removeStaleChromiumProfileLocks(config.AUTH_PATH, this.logger);
   }
 
   buildClient(pairWithPhoneNumber = null) {
@@ -44,7 +88,7 @@ class WhatsAppGateway {
   }
 
   async start() {
-    fs.mkdirSync(config.AUTH_PATH, { recursive: true });
+    this.prepareProfileForLaunch();
     db.resetStuckMessages();
     this.client = this.buildClient();
     this.bindEvents();
@@ -74,6 +118,7 @@ class WhatsAppGateway {
     });
     this.client.on('ready', async () => {
       this.status = 'ready';
+      this.lastError = null;
       this.qrDataUrl = null;
       this.pairingCode = null;
       const info = this.client.info;
@@ -136,8 +181,11 @@ class WhatsAppGateway {
 
     this.suppressRestart = true;
     try { await this.client.destroy(); } catch {}
+    await delay(1000);
+    this.prepareProfileForLaunch();
     this.client = this.buildClient({ phoneNumber: digits, showNotification: true, intervalMs: 180000 });
     this.status = 'loading';
+    this.lastError = null;
     this.qrDataUrl = null;
     this.pairingCode = null;
     this.bindEvents();
@@ -179,6 +227,8 @@ class WhatsAppGateway {
     try {
       if (this.client) { try { await this.client.destroy(); } catch {} }
       this.client = null;
+      await delay(1500);
+      this.prepareProfileForLaunch();
       this.restarting = false;
       await this.startClientOnly();
     } catch (error) {
@@ -188,6 +238,7 @@ class WhatsAppGateway {
   }
 
   async startClientOnly() {
+    this.prepareProfileForLaunch();
     this.client = this.buildClient();
     this.bindEvents();
     this.client.initialize().catch(error => this.handleFatal(error));
@@ -265,4 +316,4 @@ class WhatsAppGateway {
   }
 }
 
-module.exports = { WhatsAppGateway };
+module.exports = { WhatsAppGateway, removeStaleChromiumProfileLocks };
