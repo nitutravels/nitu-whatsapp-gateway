@@ -1,6 +1,5 @@
-name: Isolated live gateway status
+name: Cancel obsolete WhatsApp recovery command
 
-# Trigger isolated diagnostic without touching production branch.
 on:
   push:
     branches: [live-gateway-status]
@@ -10,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  probe:
+  cancel:
     runs-on: ubuntu-latest
     environment: production
     steps:
@@ -48,50 +47,41 @@ jobs:
           EOF
           chmod 600 "$HOME/.oci/config"
 
-      - name: Probe live gateway and Oracle agent
+      - name: Cancel only the temporary priority command
         shell: bash
         env:
           COMPARTMENT_OCID: ${{ vars.OCI_COMPARTMENT_OCID }}
-          ADMIN_TOKEN: ${{ secrets.GATEWAY_ADMIN_TOKEN }}
         run: |
-          set +e
-          exec > >(tee live-gateway-status.txt) 2>&1
+          set -Eeuo pipefail
+          exec > >(tee live-gateway-command-cancel.txt) 2>&1
           pipx install --quiet oci-cli
-          echo 'LIVE_GATEWAY_STATUS_BEGIN'
-          echo "CHECKED_AT=$(date -u +%FT%TZ)"
-          instance_id="$(oci compute instance list --compartment-id "$COMPARTMENT_OCID" --display-name nitu-whatsapp-gateway --all --query 'data[?"lifecycle-state"==`RUNNING`].id | [0]' --raw-output 2>/dev/null)"
-          if [[ "$instance_id" =~ ^ocid1\.instance\. ]]; then
-            echo 'INSTANCE_RUNNING=yes'
-            echo 'ORACLE_PLUGINS_BEGIN'
-            oci instance-agent plugin list --compartment-id "$COMPARTMENT_OCID" --instanceagent-id "$instance_id" --all --query 'data[].{name:name,status:status,message:message}' --output json 2>/dev/null | jq -c '.[]?' || true
-            echo 'ORACLE_PLUGINS_END'
-            echo 'RECENT_COMMAND_EXECUTIONS_BEGIN'
-            oci instance-agent command-execution list --compartment-id "$COMPARTMENT_OCID" --instance-id "$instance_id" --all --output json 2>/dev/null | jq -c '[.data[]? | {state:."lifecycle-state",created:."time-created",updated:."time-updated",exitCode:(."content"."exit-code" // null),message:(."content".message // null)}] | sort_by(.created) | reverse | .[:5][]' || true
-            echo 'RECENT_COMMAND_EXECUTIONS_END'
-          else
-            echo 'INSTANCE_RUNNING=no'
-          fi
+          echo 'GATEWAY_COMMAND_CANCEL_BEGIN'
+          commands_json="$(oci instance-agent command list --compartment-id "$COMPARTMENT_OCID" --all --output json)"
+          mapfile -t command_ids < <(jq -r '.data[]? | select(."display-name" == "Nitu WhatsApp priority recovery") | select((."is-canceled" // false) != true) | .id' <<<"$commands_json")
+          echo "MATCHING_ACTIVE_COMMANDS=${#command_ids[@]}"
+          canceled=0
+          for command_id in "${command_ids[@]}"; do
+            [ -n "$command_id" ] || continue
+            oci instance-agent command cancel --command-id "$command_id" --force >/dev/null
+            canceled=$((canceled + 1))
+          done
+          echo "CANCEL_REQUESTED_COUNT=$canceled"
+          sleep 5
+          verify_json="$(oci instance-agent command list --compartment-id "$COMPARTMENT_OCID" --all --output json)"
+          remaining="$(jq '[.data[]? | select(."display-name" == "Nitu WhatsApp priority recovery") | select((."is-canceled" // false) != true)] | length' <<<"$verify_json")"
+          echo "REMAINING_NOT_CANCELED=$remaining"
+          jq -c '.data[]? | select(."display-name" == "Nitu WhatsApp priority recovery") | {id,displayName:."display-name",isCanceled:."is-canceled",timeCreated:."time-created"}' <<<"$verify_json" || true
+          [ "$remaining" -eq 0 ]
+          echo 'GATEWAY_COMMAND_CANCEL_END'
 
-          health_code="$(curl -sS --connect-timeout 10 --max-time 30 -o /tmp/health.json -w '%{http_code}' https://wa.nitutravels.in/healthz || echo 000)"
-          ready_code="$(curl -sS --connect-timeout 10 --max-time 30 -o /tmp/ready.json -w '%{http_code}' https://wa.nitutravels.in/readyz || echo 000)"
-          status_code="$(curl -sS --connect-timeout 10 --max-time 30 -H "Authorization: Bearer $ADMIN_TOKEN" -o /tmp/status.json -w '%{http_code}' https://wa.nitutravels.in/admin/api/status || echo 000)"
-          messages_code="$(curl -sS --connect-timeout 10 --max-time 30 -H "Authorization: Bearer $ADMIN_TOKEN" -o /tmp/messages.json -w '%{http_code}' 'https://wa.nitutravels.in/admin/api/messages?limit=20' || echo 000)"
-          echo "HEALTH_HTTP=$health_code"
-          echo "READY_HTTP=$ready_code"
-          echo "STATUS_HTTP=$status_code"
-          echo "MESSAGES_HTTP=$messages_code"
-          echo -n 'STATUS='; jq -c '{status,ready,account,lastError,queue}' /tmp/status.json 2>/dev/null || cat /tmp/status.json; echo
-          echo -n 'MESSAGE_SUMMARY='; jq -c '[group_by(.status)[] | {status:.[0].status,count:length}]' /tmp/messages.json 2>/dev/null || cat /tmp/messages.json; echo
-          echo 'LIVE_GATEWAY_STATUS_END'
-
-      - name: Save diagnostic result
+      - name: Save cancellation result
         if: always()
         shell: bash
         run: |
           set -Eeuo pipefail
-          test -f live-gateway-status.txt || echo 'No result generated.' > live-gateway-status.txt
+          test -f live-gateway-command-cancel.txt || echo 'No cancellation result generated.' > live-gateway-command-cancel.txt
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add live-gateway-status.txt
-          git diff --cached --quiet || git commit -m 'Record isolated live gateway status'
+          git add live-gateway-command-cancel.txt
+          git diff --cached --quiet || git commit -m 'Record obsolete gateway command cancellation'
           git push origin HEAD:live-gateway-status
