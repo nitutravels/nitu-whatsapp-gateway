@@ -6,13 +6,17 @@ on:
     paths: ['.github/workflows/oracle-retired-resource-audit.yml']
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   audit:
     runs-on: ubuntu-latest
     environment: production
     steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: oracle-resource-audit
+
       - name: Configure OCI credentials
         shell: bash
         env:
@@ -50,6 +54,7 @@ jobs:
           TARGET_PUBLIC_IP: '161.118.187.93'
         run: |
           set -Eeuo pipefail
+          exec > >(tee oracle-audit-result.txt) 2>&1
           pipx install --quiet oci-cli
           echo 'ORACLE_INSTANCE_AUDIT_BEGIN'
 
@@ -89,8 +94,8 @@ jobs:
                 "$compartment_name" "$display_name" "$state" "$shape" "$ocpus" "$memory" "$public_ip" "$ad" "$created"
 
               if [ "$public_ip" = "$TARGET_PUBLIC_IP" ]; then
-                found=1
-                echo "TARGET_MATCH=yes"
+                found=$((found + 1))
+                echo 'TARGET_MATCH=yes'
                 echo "TARGET_COMPARTMENT=$compartment_name"
                 echo "TARGET_INSTANCE_NAME=$display_name"
                 echo "TARGET_INSTANCE_STATE=$state"
@@ -111,6 +116,18 @@ jobs:
           echo "TARGET_FOUND=$found"
           echo 'ORACLE_INSTANCE_AUDIT_END'
           if [ "$found" -ne 1 ]; then
-            echo '::error::Retired NAMS instance was not uniquely matched by public IP 161.118.187.93.'
+            echo 'Retired NAMS instance was not uniquely matched by public IP 161.118.187.93.'
             exit 1
           fi
+
+      - name: Save audit result
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -f oracle-audit-result.txt || echo 'Audit did not produce a result file.' > oracle-audit-result.txt
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add oracle-audit-result.txt
+          git diff --cached --quiet || git commit -m 'Record Oracle retirement audit result'
+          git push origin HEAD:oracle-resource-audit
