@@ -29,11 +29,20 @@
       </section>
 
       <section id="pairCard" class="card">
-        <h2>Link WhatsApp</h2>
-        <p>Use the full international number without “+”. Example: <code>919810000000</code>.</p>
-        <form id="pairForm" class="inline"><input id="phone" inputmode="numeric" placeholder="91XXXXXXXXXX" required><button>Generate pairing code</button></form>
-        <div id="pairingOutput" class="pairing" hidden><span>Pairing code</span><strong id="pairingCode"></strong><p>WhatsApp → Linked devices → Link a device → Link with phone number.</p></div>
-        <img id="qr" alt="WhatsApp QR code" hidden>
+        <h2>Connect WhatsApp</h2>
+        <p id="connectionHelp">Use a fresh QR code as the primary connection method. Recovery runs in the background and does not hold the page request open.</p>
+        <p id="diagnostic" hidden></p>
+        <button id="recoverQr" type="button">Reset browser &amp; show fresh QR</button>
+        <div id="qrWrap" hidden>
+          <p>On the primary phone: WhatsApp → Linked devices → Link a device, then scan this QR.</p>
+          <img id="qr" alt="WhatsApp QR code">
+        </div>
+        <details id="pairingFallback">
+          <summary>Use phone-number pairing instead</summary>
+          <p>This is a fallback. Use the full international number without “+”.</p>
+          <form id="pairForm" class="inline"><input id="phone" inputmode="numeric" value="918901066699" placeholder="91XXXXXXXXXX" required><button>Request pairing code</button></form>
+          <div id="pairingOutput" class="pairing" hidden><span>Pairing code</span><strong id="pairingCode"></strong><p>WhatsApp → Linked devices → Link a device → Link with phone number.</p></div>
+        </details>
       </section>
 
       <section class="card">
@@ -47,7 +56,7 @@
       </section>
 
       <section class="card dangerZone">
-        <h2>Disconnect linked account</h2><p>This removes the saved WhatsApp browser session from Oracle.</p><button id="unlink" class="danger">Unlink WhatsApp</button>
+        <h2>Disconnect linked account</h2><p>This removes the active WhatsApp browser session. Recovery backups are retained separately.</p><button id="unlink" class="danger">Unlink WhatsApp</button>
       </section>
     </div>
     <div id="toast" role="status"></div>
