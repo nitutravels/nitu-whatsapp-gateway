@@ -11,7 +11,7 @@ variable "region" {
   type        = string
 }
 variable "availability_domain_index" {
-  description = "Zero-based availability domain index. Change this if A1 capacity is unavailable."
+  description = "Zero-based availability domain index."
   type        = number
   default     = 0
   validation {
@@ -20,12 +20,12 @@ variable "availability_domain_index" {
   }
 }
 variable "instance_shape" {
-  description = "Always Free eligible Ampere A1 shape."
+  description = "Oracle Always Free compute shape. E2.1.Micro is used as the reliable x86 fallback when Ampere A1 capacity is unavailable."
   type        = string
-  default     = "VM.Standard.A1.Flex"
+  default     = "VM.Standard.E2.1.Micro"
 }
 variable "instance_ocpus" {
-  description = "Right-sized for one linked-device session while remaining within the Always Free A1 allowance."
+  description = "OCPU count used only when the selected shape is flexible."
   type        = number
   default     = 1
   validation {
@@ -34,12 +34,12 @@ variable "instance_ocpus" {
   }
 }
 variable "instance_memory_gbs" {
-  description = "Four GB is adequate for one Chromium session and avoids allocating unused free-tier capacity."
+  description = "Memory used only when the selected shape is flexible. Fixed micro shapes ignore this value."
   type        = number
-  default     = 4
+  default     = 1
   validation {
-    condition     = var.instance_memory_gbs >= 2 && var.instance_memory_gbs <= 12
-    error_message = "Use between 2 and 12 GB and keep the total A1 allocation within the Always Free allowance."
+    condition     = var.instance_memory_gbs >= 1 && var.instance_memory_gbs <= 12
+    error_message = "Use between 1 and 12 GB and keep the total allocation within the Always Free allowance."
   }
 }
 variable "boot_volume_gbs" {
@@ -51,7 +51,7 @@ variable "boot_volume_gbs" {
   }
 }
 variable "gateway_image" {
-  description = "Public multi-architecture GHCR image produced by this repository."
+  description = "Public GHCR image produced by this repository for the selected compute architecture."
   type        = string
 }
 variable "gateway_domain" {
