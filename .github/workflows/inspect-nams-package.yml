@@ -1,0 +1,47 @@
+name: Inspect NAMS package
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/inspect-nams-package.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Inspect package
+        id: inspect
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          FILE=deploy/nams/NAMS_Hybrid_Lightpanda_Agent.zip
+          SHA="$(sha256sum "$FILE" | awk '{print $1}')"
+          LIST="$(unzip -Z1 "$FILE")"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          {
+            echo 'files<<EOF'
+            echo "$LIST"
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+      - name: Report
+        shell: bash
+        run: |
+          BODY=$(cat <<'EOF'
+          SHA256: ${{ steps.inspect.outputs.sha }}
+
+          Files:
+          ```
+          ${{ steps.inspect.outputs.files }}
+          ```
+          EOF
+          )
+          gh issue create --repo "$GITHUB_REPOSITORY" --title 'NAMS Package Inspection' --body "$BODY"
