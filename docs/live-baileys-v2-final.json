@@ -1,0 +1,34 @@
+{
+  "capturedAt": "2026-07-18T21:12:40Z",
+  "healthHttp": 200,
+  "statusHttp": 200,
+  "engine": "baileys-websocket",
+  "engineVersion": "7.0.0-rc13",
+  "status": "pairing",
+  "phase": "pairing",
+  "ready": false,
+  "connected": false,
+  "registered": false,
+  "account": null,
+  "hasQr": true,
+  "hasPairingCode": false,
+  "lastOpenAt": null,
+  "lastCloseAt": null,
+  "lastHeartbeatAt": null,
+  "lastHeartbeatError": null,
+  "reconnectAttempts": 0,
+  "reconnectAt": null,
+  "queue": {
+    "failed": 1,
+    "sent": 11,
+    "active": 0
+  },
+  "worker": {
+    "busy": false,
+    "lastSendAt": null,
+    "consecutiveFailures": 0,
+    "circuitOpenUntil": null
+  },
+  "lastErrorPresent": false,
+  "lastDisconnectCode": null
+}
