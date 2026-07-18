@@ -7,7 +7,7 @@
   "type": "commonjs",
   "scripts": {
     "start": "node src/server.js",
-    "check": "node --check src/server.js && node --check src/gateway.js && node --check src/db.js && node --check src/routes.js",
+    "check": "node --check src/server.js && node --check src/gateway.js && node --check src/pairing-recovery.js && node --check src/operational-reliability.js && node --check src/db.js && node --check src/routes.js",
     "test": "node --test"
   },
   "engines": {
