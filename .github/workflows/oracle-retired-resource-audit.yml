@@ -1,4 +1,4 @@
-name: Verify gateway DNS, HTTPS and health
+name: Verify paired WhatsApp gateway
 
 on:
   push:
@@ -11,87 +11,59 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    environment: production
     steps:
       - uses: actions/checkout@v7
         with:
           ref: oracle-resource-audit
 
-      - name: Verify DNS and gateway endpoints
+      - name: Verify paired session and authenticated APIs
         shell: bash
         env:
           DOMAIN: wa.nitutravels.in
-          EXPECTED_IP: 137.23.58.166
+          ADMIN_TOKEN: ${{ secrets.GATEWAY_ADMIN_TOKEN }}
         run: |
-          set +e
-          set -uo pipefail
-          exec > >(tee gateway-dns-health-verification.txt) 2>&1
-          echo 'GATEWAY_VERIFICATION_BEGIN'
-          echo "EXPECTED_IP=$EXPECTED_IP"
+          set -Eeuo pipefail
+          exec > >(tee gateway-paired-verification.txt) 2>&1
+          echo 'PAIRED_GATEWAY_VERIFICATION_BEGIN'
 
-          dns_ok=0
-          resolved=''
-          for attempt in $(seq 1 20); do
-            resolved="$(python - "$DOMAIN" <<'PY'
-          import socket, sys
-          try:
-              print('\n'.join(sorted(set(x[4][0] for x in socket.getaddrinfo(sys.argv[1], 443, socket.AF_INET, socket.SOCK_STREAM)))))
-          except Exception:
-              pass
-          PY
-            )"
-            echo "DNS_ATTEMPT=$attempt DNS_A=${resolved:-none}"
-            if grep -qx "$EXPECTED_IP" <<<"$resolved"; then
-              dns_ok=1
-              break
-            fi
-            sleep 30
-          done
-          echo "DNS_VERIFIED=$([ "$dns_ok" -eq 1 ] && echo yes || echo no)"
-
-          service_ok=0
-          health_code=000
-          ready_code=000
-          admin_code=000
-          for attempt in $(seq 1 24); do
-            health_code="$(curl -k -sS --connect-timeout 8 --max-time 20 --resolve "$DOMAIN:443:$EXPECTED_IP" -o /tmp/health-body -w '%{http_code}' "https://$DOMAIN/healthz" 2>/tmp/health-error || echo 000)"
-            ready_code="$(curl -k -sS --connect-timeout 8 --max-time 20 --resolve "$DOMAIN:443:$EXPECTED_IP" -o /tmp/ready-body -w '%{http_code}' "https://$DOMAIN/readyz" 2>/tmp/ready-error || echo 000)"
-            admin_code="$(curl -k -sS --connect-timeout 8 --max-time 20 --resolve "$DOMAIN:443:$EXPECTED_IP" -o /tmp/admin-body -w '%{http_code}' "https://$DOMAIN/admin" 2>/tmp/admin-error || echo 000)"
-            echo "SERVICE_ATTEMPT=$attempt HEALTH=$health_code READY=$ready_code ADMIN=$admin_code"
-            if [ "$health_code" = '200' ] && { [ "$admin_code" = '200' ] || [ "$admin_code" = '401' ] || [ "$admin_code" = '403' ]; }; then
-              service_ok=1
-              break
-            fi
-            sleep 30
-          done
+          health_code="$(curl -sS --connect-timeout 10 --max-time 30 -o /tmp/health.json -w '%{http_code}' "https://$DOMAIN/healthz")"
+          ready_code="$(curl -sS --connect-timeout 10 --max-time 30 -o /tmp/ready.json -w '%{http_code}' "https://$DOMAIN/readyz")"
+          status_code="$(curl -sS --connect-timeout 10 --max-time 30 -H "Authorization: Bearer $ADMIN_TOKEN" -o /tmp/status.json -w '%{http_code}' "https://$DOMAIN/admin/api/status")"
+          messages_code="$(curl -sS --connect-timeout 10 --max-time 30 -H "Authorization: Bearer $ADMIN_TOKEN" -o /tmp/messages.json -w '%{http_code}' "https://$DOMAIN/admin/api/messages?limit=5")"
 
           echo "HEALTH_HTTP=$health_code"
           echo "READY_HTTP=$ready_code"
-          echo "ADMIN_HTTP=$admin_code"
-          echo "SERVICE_VERIFIED=$([ "$service_ok" -eq 1 ] && echo yes || echo no)"
-          echo -n 'HEALTH_BODY='; tr '\n' ' ' </tmp/health-body 2>/dev/null | head -c 500; echo
-          echo -n 'READY_BODY='; tr '\n' ' ' </tmp/ready-body 2>/dev/null | head -c 500; echo
-          echo -n 'ADMIN_BODY_PREFIX='; tr '\n' ' ' </tmp/admin-body 2>/dev/null | head -c 300; echo
-          echo -n 'HEALTH_ERROR='; tr '\n' ' ' </tmp/health-error 2>/dev/null | head -c 500; echo
+          echo "ADMIN_STATUS_HTTP=$status_code"
+          echo "QUEUE_LIST_HTTP=$messages_code"
+          echo -n 'HEALTH_BODY='; jq -c . /tmp/health.json 2>/dev/null || cat /tmp/health.json; echo
+          echo -n 'READY_BODY='; jq -c . /tmp/ready.json 2>/dev/null || cat /tmp/ready.json; echo
+          echo -n 'ADMIN_STATUS_BODY='; jq -c . /tmp/status.json 2>/dev/null || cat /tmp/status.json; echo
+          echo -n 'QUEUE_SUMMARY='; jq -c '{type:(type),count:(if type=="array" then length else null end),sampleStatuses:(if type=="array" then [.[].status] | unique else [] end)}' /tmp/messages.json 2>/dev/null || echo '{"parse":"failed"}'; echo
 
-          if [ "$dns_ok" -eq 1 ]; then
-            public_health_code="$(curl -sS --connect-timeout 8 --max-time 20 -o /tmp/public-health-body -w '%{http_code}' "https://$DOMAIN/healthz" 2>/tmp/public-health-error || echo 000)"
-            echo "PUBLIC_HTTPS_HEALTH=$public_health_code"
-            echo | openssl s_client -connect "$DOMAIN:443" -servername "$DOMAIN" 2>/dev/null | openssl x509 -noout -subject -issuer -dates 2>/dev/null || true
+          ready_value="$(jq -r '.ready // false' /tmp/ready.json 2>/dev/null || echo false)"
+          gateway_ready="$(jq -r '.ready // false' /tmp/status.json 2>/dev/null || echo false)"
+          gateway_status="$(jq -r '.status // "unknown"' /tmp/status.json 2>/dev/null || echo unknown)"
+          echo "READY_VALUE=$ready_value"
+          echo "GATEWAY_READY=$gateway_ready"
+          echo "GATEWAY_STATUS=$gateway_status"
+
+          if [ "$health_code" = '200' ] && [ "$ready_code" = '200' ] && [ "$status_code" = '200' ] && [ "$messages_code" = '200' ] && [ "$ready_value" = 'true' ] && [ "$gateway_ready" = 'true' ]; then
+            echo 'PAIRED_GATEWAY_VERIFIED=yes'
           else
-            echo 'PUBLIC_HTTPS_HEALTH=not_tested_dns_unresolved'
+            echo 'PAIRED_GATEWAY_VERIFIED=no'
+            exit 1
           fi
+          echo 'PAIRED_GATEWAY_VERIFICATION_END'
 
-          echo 'GATEWAY_VERIFICATION_END'
-          [ "$dns_ok" -eq 1 ] && [ "$service_ok" -eq 1 ]
-
-      - name: Persist verification result
+      - name: Persist paired verification
         if: always()
         shell: bash
         run: |
           set -Eeuo pipefail
-          test -f gateway-dns-health-verification.txt || echo 'Verification did not produce a result.' > gateway-dns-health-verification.txt
+          test -f gateway-paired-verification.txt || echo 'Verification did not produce a result.' > gateway-paired-verification.txt
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add gateway-dns-health-verification.txt
-          git diff --cached --quiet || git commit -m 'Record gateway DNS and health verification'
+          git add gateway-paired-verification.txt
+          git diff --cached --quiet || git commit -m 'Record paired WhatsApp gateway verification'
           git push origin HEAD:oracle-resource-audit
