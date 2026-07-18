@@ -111,6 +111,109 @@ jobs:
         run: |
           pipx install oci-cli
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Permanently retire obsolete NAMS server
+        if: >-
+          github.event_name == 'push' &&
+          contains(github.event.head_commit.message, '[retire-nams]')
+        shell: bash
+        env:
+          TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
+          TARGET_PUBLIC_IP: '161.118.187.93'
+          TARGET_NAME: 'nams-phase1'
+          TARGET_SHAPE: 'VM.Standard.E2.1.Micro'
+        run: |
+          set -Eeuo pipefail
+          compartments_file="$(mktemp)"
+          matches_file="$(mktemp)"
+          printf '%s\t%s\n' "$TENANCY_OCID" 'ROOT_TENANCY' > "$compartments_file"
+          oci iam compartment list \
+            --compartment-id "$TENANCY_OCID" \
+            --compartment-id-in-subtree true \
+            --access-level ANY \
+            --all \
+            --query 'data[?"lifecycle-state"==`ACTIVE`].[id,name]' \
+            --output json | jq -r '.[] | @tsv' >> "$compartments_file"
+
+          while IFS=$'\t' read -r compartment_id compartment_name; do
+            [ -n "$compartment_id" ] || continue
+            instances_json="$(oci compute instance list --compartment-id "$compartment_id" --all --output json 2>/dev/null || printf '{"data":[]}')"
+            while IFS= read -r instance; do
+              [ -n "$instance" ] || continue
+              instance_id="$(jq -r '.id' <<<"$instance")"
+              display_name="$(jq -r '."display-name"' <<<"$instance")"
+              state="$(jq -r '."lifecycle-state"' <<<"$instance")"
+              shape="$(jq -r '.shape' <<<"$instance")"
+              ad="$(jq -r '."availability-domain"' <<<"$instance")"
+              vnic_json="$(oci compute vnic-attachment list --compartment-id "$compartment_id" --instance-id "$instance_id" --all --output json 2>/dev/null || printf '{"data":[]}')"
+              public_ip=''
+              while IFS= read -r vnic_id; do
+                [ -n "$vnic_id" ] || continue
+                candidate="$(oci network vnic get --vnic-id "$vnic_id" --query 'data."public-ip"' --raw-output 2>/dev/null || true)"
+                if [ -n "$candidate" ] && [ "$candidate" != 'null' ]; then public_ip="$candidate"; break; fi
+              done < <(jq -r '.data[]? | ."vnic-id"' <<<"$vnic_json")
+              if [ "$public_ip" = "$TARGET_PUBLIC_IP" ]; then
+                printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$instance_id" "$compartment_id" "$compartment_name" "$display_name" "$shape" "$state" "$ad" >> "$matches_file"
+              fi
+            done < <(jq -c '.data[]? | select(."lifecycle-state" != "TERMINATED")' <<<"$instances_json")
+          done < "$compartments_file"
+
+          match_count="$(wc -l < "$matches_file" | tr -d ' ')"
+          if [ "$match_count" != '1' ]; then
+            echo "::error::Expected exactly one active Oracle instance at $TARGET_PUBLIC_IP; found $match_count. Nothing was deleted."
+            exit 1
+          fi
+
+          IFS=$'\t' read -r instance_id compartment_id compartment_name display_name shape state ad < "$matches_file"
+          if [ "$compartment_id" != "$TENANCY_OCID" ] || [ "$compartment_name" != 'ROOT_TENANCY' ] || [ "$display_name" != "$TARGET_NAME" ] || [ "$shape" != "$TARGET_SHAPE" ]; then
+            echo "::error::The matched instance does not satisfy the approved deletion guardrails. Nothing was deleted."
+            exit 1
+          fi
+
+          boot_json="$(oci compute boot-volume-attachment list --availability-domain "$ad" --compartment-id "$compartment_id" --instance-id "$instance_id" --all --output json)"
+          mapfile -t boot_volume_ids < <(jq -r '.data[]? | select(."lifecycle-state" != "TERMINATED") | ."boot-volume-id"' <<<"$boot_json")
+
+          public_ip_id=''
+          public_ip_lifetime=''
+          if public_ip_json="$(oci network public-ip get --public-ip-address "$TARGET_PUBLIC_IP" --output json 2>/dev/null)"; then
+            public_ip_id="$(jq -r '.data.id // empty' <<<"$public_ip_json")"
+            public_ip_lifetime="$(jq -r '.data.lifetime // empty' <<<"$public_ip_json")"
+          fi
+
+          echo "Terminating approved retired instance: name=$display_name shape=$shape state=$state ip=$TARGET_PUBLIC_IP compartment=$compartment_name"
+          oci compute instance terminate \
+            --instance-id "$instance_id" \
+            --preserve-boot-volume false \
+            --preserve-data-volumes-created-at-launch false \
+            --force \
+            --wait-for-state SUCCEEDED \
+            --max-wait-seconds 900 >/dev/null
+
+          if [ "$public_ip_lifetime" = 'RESERVED' ] && [ -n "$public_ip_id" ]; then
+            oci network public-ip delete --public-ip-id "$public_ip_id" --force >/dev/null
+          fi
+
+          for boot_volume_id in "${boot_volume_ids[@]}"; do
+            if oci bv boot-volume get --boot-volume-id "$boot_volume_id" >/dev/null 2>&1; then
+              oci bv boot-volume delete --boot-volume-id "$boot_volume_id" --force >/dev/null 2>&1 || true
+            fi
+          done
+
+          sleep 15
+          if oci compute instance get --instance-id "$instance_id" --query 'data."lifecycle-state"' --raw-output >/tmp/nams-state 2>/dev/null; then
+            remaining_state="$(cat /tmp/nams-state)"
+            if [ "$remaining_state" != 'TERMINATED' ]; then
+              echo "::error::NAMS instance deletion was requested but current state is $remaining_state."
+              exit 1
+            fi
+          fi
+          echo "Old NAMS instance and boot volume retirement completed."
+          {
+            echo '## Retired Oracle project'
+            echo "- Instance: $display_name"
+            echo "- Former public IP: $TARGET_PUBLIC_IP"
+            echo "- Shape: $shape"
+            echo '- Boot volume deletion requested: yes'
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Resolve Oracle tenancy resources
         shell: bash
         env:
