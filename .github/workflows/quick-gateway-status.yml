@@ -1,5 +1,6 @@
 name: One-shot gateway recovery probe
 
+# Immediate read-only probe after Chromium lock repair.
 on:
   push:
     branches: [main]
