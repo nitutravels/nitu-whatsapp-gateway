@@ -1,6 +1,5 @@
-name: Verify Oracle resources after NAMS retirement
+name: Priority Oracle gateway repair
 
-# Recheck after gateway deployment commit f4eedc06 on 2026-07-18.
 on:
   push:
     branches: [oracle-resource-audit]
@@ -10,13 +9,41 @@ permissions:
   contents: write
 
 jobs:
-  verify:
+  repair:
     runs-on: ubuntu-latest
     environment: production
+    env:
+      TF_IN_AUTOMATION: "true"
+      TF_INPUT: "false"
+      TF_VAR_tenancy_ocid: ${{ secrets.OCI_TENANCY_OCID }}
+      TF_VAR_compartment_ocid: ${{ vars.OCI_COMPARTMENT_OCID }}
+      TF_VAR_region: ${{ vars.OCI_REGION }}
+      TF_VAR_gateway_api_key: ${{ secrets.GATEWAY_API_KEY }}
+      TF_VAR_gateway_admin_token: ${{ secrets.GATEWAY_ADMIN_TOKEN }}
+      TF_VAR_gateway_webhook_secret: ${{ secrets.GATEWAY_WEBHOOK_SECRET }}
+      TF_VAR_gateway_domain: ${{ vars.GATEWAY_DOMAIN }}
+      TF_VAR_webhook_url: ${{ vars.WEBHOOK_URL }}
+      TF_VAR_default_country_code: ${{ vars.DEFAULT_COUNTRY_CODE || '91' }}
+      TF_VAR_media_allowed_hosts: ${{ vars.MEDIA_ALLOWED_HOSTS || 'nitutravels.in,www.nitutravels.in' }}
+      TF_VAR_availability_domain_index: ${{ vars.AVAILABILITY_DOMAIN_INDEX || '0' }}
+      TF_VAR_gateway_image: ghcr.io/nitutravels/nitu-whatsapp-gateway:latest
     steps:
       - uses: actions/checkout@v7
         with:
           ref: oracle-resource-audit
+          fetch-depth: 1
+
+      - name: Prepare current main source
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git fetch --depth=1 origin main
+          rm -rf /tmp/gateway-main
+          git worktree add --detach /tmp/gateway-main FETCH_HEAD
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.15.8
 
       - name: Configure OCI credentials
         shell: bash
@@ -48,97 +75,65 @@ jobs:
           EOF
           chmod 600 "$HOME/.oci/config"
 
-      - name: Verify compute, volumes and reserved IPs
+      - name: Apply current Terraform and capture exact result
+        id: apply
         shell: bash
         env:
-          TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
-          GATEWAY_COMPARTMENT_OCID: ${{ vars.OCI_COMPARTMENT_OCID }}
-          OLD_PUBLIC_IP: '161.118.187.93'
+          OCI_NAMESPACE: ${{ vars.OCI_NAMESPACE }}
+          STATE_BUCKET: ${{ vars.OCI_TF_STATE_BUCKET }}
         run: |
-          set -Eeuo pipefail
-          exec > >(tee oracle-post-retirement-verification.txt) 2>&1
-          pipx install --quiet oci-cli
-          echo 'ORACLE_POST_RETIREMENT_VERIFICATION_BEGIN'
-
-          old_instance_count=0
-          old_boot_volume_count=0
-          gateway_instance_count=0
-          gateway_public_ip=''
-
-          printf '%s\t%s\n%s\t%s\n' "$TENANCY_OCID" 'ROOT_TENANCY' "$GATEWAY_COMPARTMENT_OCID" 'NituWAGateway' > /tmp/compartments.tsv
-
-          while IFS=$'\t' read -r compartment_id compartment_name; do
-            instances_json="$(oci compute instance list --compartment-id "$compartment_id" --all --output json)"
-            while IFS= read -r instance; do
-              [ -n "$instance" ] || continue
-              instance_id="$(jq -r '.id' <<<"$instance")"
-              display_name="$(jq -r '."display-name"' <<<"$instance")"
-              state="$(jq -r '."lifecycle-state"' <<<"$instance")"
-              shape="$(jq -r '.shape' <<<"$instance")"
-              ocpus="$(jq -r '."shape-config".ocpus // ""' <<<"$instance")"
-              memory="$(jq -r '."shape-config"."memory-in-gbs" // ""' <<<"$instance")"
-              public_ip=''
-              vnic_json="$(oci compute vnic-attachment list --compartment-id "$compartment_id" --instance-id "$instance_id" --all --output json 2>/dev/null || printf '{"data":[]}')"
-              while IFS= read -r vnic_id; do
-                [ -n "$vnic_id" ] || continue
-                candidate="$(oci network vnic get --vnic-id "$vnic_id" --query 'data."public-ip"' --raw-output 2>/dev/null || true)"
-                if [ -n "$candidate" ] && [ "$candidate" != 'null' ]; then public_ip="$candidate"; break; fi
-              done < <(jq -r '.data[]? | ."vnic-id"' <<<"$vnic_json")
-              echo "INSTANCE compartment=$compartment_name name=$display_name state=$state shape=$shape ocpus=$ocpus memory_gb=$memory public_ip=${public_ip:-none}"
-              if [ "$display_name" = 'nams-phase1' ] || [ "$public_ip" = "$OLD_PUBLIC_IP" ]; then
-                old_instance_count=$((old_instance_count + 1))
-              fi
-              if [ "$display_name" = 'nitu-whatsapp-gateway' ] && [ "$state" != 'TERMINATED' ]; then
-                gateway_instance_count=$((gateway_instance_count + 1))
-                gateway_public_ip="$public_ip"
-              fi
-            done < <(jq -c '.data[]? | select(."lifecycle-state" != "TERMINATED")' <<<"$instances_json")
-          done < /tmp/compartments.tsv
-
-          ad="$(oci iam availability-domain list --compartment-id "$TENANCY_OCID" --query 'data[0].name' --raw-output)"
-          while IFS=$'\t' read -r compartment_id compartment_name; do
-            volumes_json="$(oci bv boot-volume list --availability-domain "$ad" --compartment-id "$compartment_id" --all --output json)"
-            while IFS= read -r volume; do
-              [ -n "$volume" ] || continue
-              volume_name="$(jq -r '."display-name"' <<<"$volume")"
-              volume_state="$(jq -r '."lifecycle-state"' <<<"$volume")"
-              volume_size="$(jq -r '."size-in-gbs"' <<<"$volume")"
-              echo "BOOT_VOLUME compartment=$compartment_name name=$volume_name state=$volume_state size_gb=$volume_size"
-              if [ "$volume_name" = 'nams-phase1 (Boot Volume)' ] && [ "$volume_state" != 'TERMINATED' ]; then
-                old_boot_volume_count=$((old_boot_volume_count + 1))
-              fi
-            done < <(jq -c '.data[]?' <<<"$volumes_json")
-          done < /tmp/compartments.tsv
-
-          reserved_json="$(oci network public-ip list --compartment-id "$GATEWAY_COMPARTMENT_OCID" --lifetime RESERVED --scope REGION --all --output json)"
-          while IFS= read -r public_ip; do
-            [ -n "$public_ip" ] || continue
-            address="$(jq -r '."ip-address"' <<<"$public_ip")"
-            name="$(jq -r '."display-name"' <<<"$public_ip")"
-            state="$(jq -r '."lifecycle-state"' <<<"$public_ip")"
-            echo "RESERVED_PUBLIC_IP name=$name address=$address state=$state"
-            if [ "$name" = 'nitu-wa-gateway-reserved-ip' ]; then gateway_public_ip="$address"; fi
-          done < <(jq -c '.data[]?' <<<"$reserved_json")
-
-          echo "OLD_INSTANCE_COUNT=$old_instance_count"
-          echo "OLD_BOOT_VOLUME_COUNT=$old_boot_volume_count"
-          echo "GATEWAY_INSTANCE_COUNT=$gateway_instance_count"
-          echo "GATEWAY_PUBLIC_IP=${gateway_public_ip:-none}"
-          if [ "$old_instance_count" -eq 0 ] && [ "$old_boot_volume_count" -eq 0 ]; then
-            echo 'NAMS_RETIREMENT_VERIFIED=yes'
-          else
-            echo 'NAMS_RETIREMENT_VERIFIED=no'
+          set +e
+          cd /tmp/gateway-main/infra/terraform
+          terraform init -reconfigure -no-color \
+            -backend-config="bucket=$STATE_BUCKET" \
+            -backend-config="namespace=$OCI_NAMESPACE" \
+            -backend-config="region=${{ vars.OCI_REGION }}" \
+            -backend-config="key=nitu-whatsapp-gateway/terraform.tfstate" \
+            -backend-config="auth=APIKey" \
+            -backend-config="config_file_profile=DEFAULT" >/tmp/init.log 2>&1
+          init_status=$?
+          if [ "$init_status" -ne 0 ]; then
+            {
+              echo 'APPLY_STATUS=init_failed'
+              tail -n 80 /tmp/init.log
+            } > "$GITHUB_WORKSPACE/oracle-priority-repair-result.txt"
+            exit 0
           fi
-          echo 'ORACLE_POST_RETIREMENT_VERIFICATION_END'
 
-      - name: Persist verification result
+          terraform apply -auto-approve -no-color >/tmp/apply.log 2>&1
+          apply_status=$?
+          if [ "$apply_status" -eq 0 ]; then
+            {
+              echo 'APPLY_STATUS=success'
+              echo "PUBLIC_IP=$(terraform output -raw public_ip 2>/dev/null || true)"
+              echo "DASHBOARD_URL=$(terraform output -raw dashboard_url 2>/dev/null || true)"
+              echo "HEALTH_URL=$(terraform output -raw health_url 2>/dev/null || true)"
+            } > "$GITHUB_WORKSPACE/oracle-priority-repair-result.txt"
+          else
+            {
+              echo 'APPLY_STATUS=failed'
+              echo 'ERROR_BLOCK_BEGIN'
+              awk 'BEGIN{p=0;c=0} /^Error:/{p=1;c=0} p{print;c++} p&&c>=45{p=0}' /tmp/apply.log | tail -n 180
+              echo 'OCI_ERROR_SUMMARY_BEGIN'
+              grep -Ei 'Out of host capacity|OutOfHostCapacity|InternalError|service limit|LimitExceeded|NotAuthorized|NotAuthenticated|status: [0-9]{3}|code:' /tmp/apply.log | tail -n 50
+              echo 'OCI_ERROR_SUMMARY_END'
+              echo 'ERROR_BLOCK_END'
+            } > "$GITHUB_WORKSPACE/oracle-priority-repair-result.txt"
+          fi
+          exit 0
+
+      - name: Persist repair result
         if: always()
         shell: bash
         run: |
           set -Eeuo pipefail
-          test -f oracle-post-retirement-verification.txt || echo 'Verification did not produce a result file.' > oracle-post-retirement-verification.txt
+          test -f oracle-priority-repair-result.txt || echo 'APPLY_STATUS=no_result' > oracle-priority-repair-result.txt
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add oracle-post-retirement-verification.txt
-          git diff --cached --quiet || git commit -m 'Record post-retirement Oracle verification'
+          git add oracle-priority-repair-result.txt
+          git diff --cached --quiet || git commit -m 'Record exact Oracle priority repair result'
           git push origin HEAD:oracle-resource-audit
+
+      - name: Mark unsuccessful apply
+        shell: bash
+        run: grep -q '^APPLY_STATUS=success$' oracle-priority-repair-result.txt
