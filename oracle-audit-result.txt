@@ -1,4 +1,9 @@
-ORACLE_INSTANCE_AUDIT_BEGIN
-TARGET_FOUND=0
-ORACLE_INSTANCE_AUDIT_END
-Retired NAMS instance was not uniquely matched by public IP 161.118.187.93.
+ORACLE_TENANCY_AUDIT_BEGIN
+REGION=ap-mumbai-1
+TARGET_PUBLIC_IP=161.118.187.93
+RESOURCE_SEARCH_BEGIN
+jq: error: syntax error, unexpected INVALID_CHARACTER (Unix shell quoting issues?) at <top-level>, line 1:
+.data.items[]? | "SEARCH_INSTANCE name=\(.\"display-name\" // .displayName // \"\") state=\(.\"lifecycle-state\" // .lifecycleState // \"\") compartment_id=\(.\"compartment-id\" // .compartmentId // \"\") identifier=\(.identifier // .id // \"\")"                                          
+jq: error: try .["field"] instead of .field for unusually named fields at <top-level>, line 1:
+.data.items[]? | "SEARCH_INSTANCE name=\(.\"display-name\" // .displayName // \"\") state=\(.\"lifecycle-state\" // .lifecycleState // \"\") compartment_id=\(.\"compartment-id\" // .compartmentId // \"\") identifier=\(.identifier // .id // \"\")"                                         
+jq: 2 compile errors
