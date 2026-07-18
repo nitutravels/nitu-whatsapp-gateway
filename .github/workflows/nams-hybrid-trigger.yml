@@ -1,0 +1,87 @@
+name: Trigger and report NAMS Hybrid deployment
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/nams-hybrid-trigger.yml'
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+  issues: write
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Dispatch NAMS deployment
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          gh workflow run nams-hybrid-deploy.yml --repo "$GITHUB_REPOSITORY" --ref main -f reinstall=true
+          sleep 8
+          RUN_JSON="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow nams-hybrid-deploy.yml --branch main --event workflow_dispatch --limit 1 --json databaseId,status,conclusion,url,createdAt)"
+          RUN_ID="$(jq -r '.[0].databaseId // empty' <<<"$RUN_JSON")"
+          RUN_URL="$(jq -r '.[0].url // empty' <<<"$RUN_JSON")"
+          if [[ -z "$RUN_ID" ]]; then
+            echo 'Unable to resolve dispatched run.' >&2
+            exit 1
+          fi
+          echo "run_id=$RUN_ID" >> "$GITHUB_ENV"
+          echo "run_url=$RUN_URL" >> "$GITHUB_ENV"
+
+      - name: Publish running status
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          TITLE='NAMS Hybrid Deployment Status'
+          BODY=$(cat <<EOF
+          Status: RUNNING
+          Workflow run: $run_url
+          Run ID: $run_id
+          Started by automated hybrid installer.
+          EOF
+          )
+          ISSUE="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search 'NAMS Hybrid Deployment Status in:title' --json number --jq '.[0].number // empty')"
+          if [[ -n "$ISSUE" ]]; then
+            gh issue edit "$ISSUE" --repo "$GITHUB_REPOSITORY" --body "$BODY"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY"
+          fi
+
+      - name: Wait for deployment
+        id: wait
+        continue-on-error: true
+        shell: bash
+        run: gh run watch "$run_id" --repo "$GITHUB_REPOSITORY" --exit-status --interval 15
+
+      - name: Publish final status
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          RUN_JSON="$(gh run view "$run_id" --repo "$GITHUB_REPOSITORY" --json status,conclusion,url)"
+          STATUS="$(jq -r '.status' <<<"$RUN_JSON")"
+          CONCLUSION="$(jq -r '.conclusion // "unknown"' <<<"$RUN_JSON")"
+          RUN_URL="$(jq -r '.url' <<<"$RUN_JSON")"
+          TITLE='NAMS Hybrid Deployment Status'
+          BODY=$(cat <<EOF
+          Status: $STATUS
+          Conclusion: $CONCLUSION
+          Workflow run: $RUN_URL
+          Run ID: $run_id
+          Check the workflow logs for the exact deployment result. Generated credentials are never written to this public issue.
+          EOF
+          )
+          ISSUE="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search 'NAMS Hybrid Deployment Status in:title' --json number --jq '.[0].number // empty')"
+          if [[ -n "$ISSUE" ]]; then
+            gh issue edit "$ISSUE" --repo "$GITHUB_REPOSITORY" --body "$BODY"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY"
+          fi
+          [[ "$CONCLUSION" == 'success' ]]
