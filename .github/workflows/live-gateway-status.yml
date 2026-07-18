@@ -1,5 +1,6 @@
 name: Isolated live gateway status
 
+# Trigger isolated diagnostic without touching production branch.
 on:
   push:
     branches: [live-gateway-status]
