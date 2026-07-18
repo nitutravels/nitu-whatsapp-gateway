@@ -1,4 +1,4 @@
-name: Priority Oracle gateway repair
+name: Verify gateway DNS, HTTPS and health
 
 on:
   push:
@@ -9,181 +9,89 @@ permissions:
   contents: write
 
 jobs:
-  repair:
+  verify:
     runs-on: ubuntu-latest
-    environment: production
-    env:
-      TF_IN_AUTOMATION: "true"
-      TF_INPUT: "false"
-      TF_VAR_tenancy_ocid: ${{ secrets.OCI_TENANCY_OCID }}
-      TF_VAR_compartment_ocid: ${{ vars.OCI_COMPARTMENT_OCID }}
-      TF_VAR_region: ${{ vars.OCI_REGION }}
-      TF_VAR_instance_shape: "VM.Standard.E2.1.Micro"
-      TF_VAR_instance_ocpus: "1"
-      TF_VAR_instance_memory_gbs: "1"
-      TF_VAR_gateway_api_key: ${{ secrets.GATEWAY_API_KEY }}
-      TF_VAR_gateway_admin_token: ${{ secrets.GATEWAY_ADMIN_TOKEN }}
-      TF_VAR_gateway_webhook_secret: ${{ secrets.GATEWAY_WEBHOOK_SECRET }}
-      TF_VAR_gateway_domain: ${{ vars.GATEWAY_DOMAIN }}
-      TF_VAR_webhook_url: ${{ vars.WEBHOOK_URL }}
-      TF_VAR_default_country_code: ${{ vars.DEFAULT_COUNTRY_CODE || '91' }}
-      TF_VAR_media_allowed_hosts: ${{ vars.MEDIA_ALLOWED_HOSTS || 'nitutravels.in,www.nitutravels.in' }}
-      TF_VAR_availability_domain_index: ${{ vars.AVAILABILITY_DOMAIN_INDEX || '0' }}
-      TF_VAR_gateway_image: ghcr.io/nitutravels/nitu-whatsapp-gateway:latest
     steps:
       - uses: actions/checkout@v7
         with:
           ref: oracle-resource-audit
-          fetch-depth: 1
 
-      - name: Prepare current main source
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          git fetch --depth=1 origin main
-          rm -rf /tmp/gateway-main
-          git worktree add --detach /tmp/gateway-main FETCH_HEAD
-
-      - uses: docker/setup-buildx-action@v4
-
-      - name: Wait for verified AMD64 image
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          image="$TF_VAR_gateway_image"
-          ready=0
-          for attempt in $(seq 1 30); do
-            if docker buildx imagetools inspect "$image" >/tmp/image-manifest.txt 2>/tmp/image-manifest.err && \
-               grep -Eq 'linux/amd64|Platform:[[:space:]]+linux/amd64' /tmp/image-manifest.txt; then
-              ready=1
-              break
-            fi
-            sleep 20
-          done
-          if [ "$ready" -ne 1 ]; then
-            {
-              echo 'APPLY_STATUS=image_not_ready'
-              echo 'ERROR_BLOCK_BEGIN'
-              echo 'The public GHCR latest tag does not yet expose linux/amd64.'
-              tail -n 40 /tmp/image-manifest.txt 2>/dev/null || true
-              tail -n 20 /tmp/image-manifest.err 2>/dev/null || true
-              echo 'ERROR_BLOCK_END'
-            } > oracle-priority-repair-result.txt
-            exit 1
-          fi
-          echo 'IMAGE_PLATFORM=linux/amd64' > oracle-priority-repair-result.txt
-
-      - uses: hashicorp/setup-terraform@v4
-        with:
-          terraform_version: 1.15.8
-
-      - name: Configure OCI credentials
+      - name: Verify DNS and gateway endpoints
         shell: bash
         env:
-          OCI_PRIVATE_KEY_PEM: ${{ secrets.OCI_PRIVATE_KEY }}
-          OCI_FINGERPRINT_VALUE: ${{ secrets.OCI_FINGERPRINT }}
-        run: |
-          set -Eeuo pipefail
-          mkdir -p "$HOME/.oci"
-          python - <<'PY'
-          import os
-          from pathlib import Path
-          value = os.environ.get('OCI_PRIVATE_KEY_PEM', '').strip()
-          if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
-              value = value[1:-1]
-          if '\\n' in value and '\n' not in value:
-              value = value.replace('\\r', '').replace('\\n', '\n')
-          Path.home().joinpath('.oci/key.pem').write_text(value.replace('\r', '').strip() + '\n', encoding='utf-8')
-          PY
-          chmod 600 "$HOME/.oci/key.pem"
-          FINGERPRINT="$(printf '%s' "$OCI_FINGERPRINT_VALUE" | tr -d '[:space:]')"
-          cat > "$HOME/.oci/config" <<EOF
-          [DEFAULT]
-          user=${{ secrets.OCI_USER_OCID }}
-          fingerprint=$FINGERPRINT
-          tenancy=${{ secrets.OCI_TENANCY_OCID }}
-          region=${{ vars.OCI_REGION }}
-          key_file=$HOME/.oci/key.pem
-          EOF
-          chmod 600 "$HOME/.oci/config"
-
-      - name: Apply E2 fallback and capture exact result
-        id: apply
-        shell: bash
-        env:
-          OCI_NAMESPACE: ${{ vars.OCI_NAMESPACE }}
-          STATE_BUCKET: ${{ vars.OCI_TF_STATE_BUCKET }}
+          DOMAIN: wa.nitutravels.in
+          EXPECTED_IP: 137.23.58.166
         run: |
           set +e
-          cd /tmp/gateway-main/infra/terraform
-          terraform init -reconfigure -no-color \
-            -backend-config="bucket=$STATE_BUCKET" \
-            -backend-config="namespace=$OCI_NAMESPACE" \
-            -backend-config="region=${{ vars.OCI_REGION }}" \
-            -backend-config="key=nitu-whatsapp-gateway/terraform.tfstate" \
-            -backend-config="auth=APIKey" \
-            -backend-config="config_file_profile=DEFAULT" >/tmp/init.log 2>&1
-          init_status=$?
-          if [ "$init_status" -ne 0 ]; then
-            {
-              echo 'APPLY_STATUS=init_failed'
-              tail -n 80 /tmp/init.log
-            } > "$GITHUB_WORKSPACE/oracle-priority-repair-result.txt"
-            exit 0
-          fi
+          set -uo pipefail
+          exec > >(tee gateway-dns-health-verification.txt) 2>&1
+          echo 'GATEWAY_VERIFICATION_BEGIN'
+          echo "EXPECTED_IP=$EXPECTED_IP"
 
-          terraform fmt -check -recursive -no-color >/tmp/fmt.log 2>&1
-          fmt_status=$?
-          terraform validate -no-color >/tmp/validate.log 2>&1
-          validate_status=$?
-          if [ "$fmt_status" -ne 0 ] || [ "$validate_status" -ne 0 ]; then
-            {
-              echo 'APPLY_STATUS=validation_failed'
-              cat /tmp/fmt.log
-              cat /tmp/validate.log
-            } > "$GITHUB_WORKSPACE/oracle-priority-repair-result.txt"
-            exit 0
-          fi
+          dns_ok=0
+          resolved=''
+          for attempt in $(seq 1 20); do
+            resolved="$(python - "$DOMAIN" <<'PY'
+          import socket, sys
+          try:
+              print('\n'.join(sorted(set(x[4][0] for x in socket.getaddrinfo(sys.argv[1], 443, socket.AF_INET, socket.SOCK_STREAM)))))
+          except Exception:
+              pass
+          PY
+            )"
+            echo "DNS_ATTEMPT=$attempt DNS_A=${resolved:-none}"
+            if grep -qx "$EXPECTED_IP" <<<"$resolved"; then
+              dns_ok=1
+              break
+            fi
+            sleep 30
+          done
+          echo "DNS_VERIFIED=$([ "$dns_ok" -eq 1 ] && echo yes || echo no)"
 
-          terraform apply -auto-approve -no-color >/tmp/apply.log 2>&1
-          apply_status=$?
-          if [ "$apply_status" -eq 0 ]; then
-            {
-              echo 'APPLY_STATUS=success'
-              echo 'IMAGE_PLATFORM=linux/amd64'
-              echo 'INSTANCE_SHAPE=VM.Standard.E2.1.Micro'
-              echo "PUBLIC_IP=$(terraform output -raw public_ip 2>/dev/null || true)"
-              echo "DASHBOARD_URL=$(terraform output -raw dashboard_url 2>/dev/null || true)"
-              echo "HEALTH_URL=$(terraform output -raw health_url 2>/dev/null || true)"
-              echo "INSTANCE_ID=$(terraform output -raw instance_id 2>/dev/null || true)"
-            } > "$GITHUB_WORKSPACE/oracle-priority-repair-result.txt"
+          service_ok=0
+          health_code=000
+          ready_code=000
+          admin_code=000
+          for attempt in $(seq 1 24); do
+            health_code="$(curl -k -sS --connect-timeout 8 --max-time 20 --resolve "$DOMAIN:443:$EXPECTED_IP" -o /tmp/health-body -w '%{http_code}' "https://$DOMAIN/healthz" 2>/tmp/health-error || echo 000)"
+            ready_code="$(curl -k -sS --connect-timeout 8 --max-time 20 --resolve "$DOMAIN:443:$EXPECTED_IP" -o /tmp/ready-body -w '%{http_code}' "https://$DOMAIN/readyz" 2>/tmp/ready-error || echo 000)"
+            admin_code="$(curl -k -sS --connect-timeout 8 --max-time 20 --resolve "$DOMAIN:443:$EXPECTED_IP" -o /tmp/admin-body -w '%{http_code}' "https://$DOMAIN/admin" 2>/tmp/admin-error || echo 000)"
+            echo "SERVICE_ATTEMPT=$attempt HEALTH=$health_code READY=$ready_code ADMIN=$admin_code"
+            if [ "$health_code" = '200' ] && { [ "$admin_code" = '200' ] || [ "$admin_code" = '401' ] || [ "$admin_code" = '403' ]; }; then
+              service_ok=1
+              break
+            fi
+            sleep 30
+          done
+
+          echo "HEALTH_HTTP=$health_code"
+          echo "READY_HTTP=$ready_code"
+          echo "ADMIN_HTTP=$admin_code"
+          echo "SERVICE_VERIFIED=$([ "$service_ok" -eq 1 ] && echo yes || echo no)"
+          echo -n 'HEALTH_BODY='; tr '\n' ' ' </tmp/health-body 2>/dev/null | head -c 500; echo
+          echo -n 'READY_BODY='; tr '\n' ' ' </tmp/ready-body 2>/dev/null | head -c 500; echo
+          echo -n 'ADMIN_BODY_PREFIX='; tr '\n' ' ' </tmp/admin-body 2>/dev/null | head -c 300; echo
+          echo -n 'HEALTH_ERROR='; tr '\n' ' ' </tmp/health-error 2>/dev/null | head -c 500; echo
+
+          if [ "$dns_ok" -eq 1 ]; then
+            public_health_code="$(curl -sS --connect-timeout 8 --max-time 20 -o /tmp/public-health-body -w '%{http_code}' "https://$DOMAIN/healthz" 2>/tmp/public-health-error || echo 000)"
+            echo "PUBLIC_HTTPS_HEALTH=$public_health_code"
+            echo | openssl s_client -connect "$DOMAIN:443" -servername "$DOMAIN" 2>/dev/null | openssl x509 -noout -subject -issuer -dates 2>/dev/null || true
           else
-            {
-              echo 'APPLY_STATUS=failed'
-              echo 'IMAGE_PLATFORM=linux/amd64'
-              echo 'INSTANCE_SHAPE=VM.Standard.E2.1.Micro'
-              echo 'ERROR_BLOCK_BEGIN'
-              awk 'BEGIN{p=0;c=0} /^Error:/{p=1;c=0} p{print;c++} p&&c>=45{p=0}' /tmp/apply.log | tail -n 180
-              echo 'OCI_ERROR_SUMMARY_BEGIN'
-              grep -Ei 'Out of host capacity|OutOfHostCapacity|InternalError|service limit|LimitExceeded|NotAuthorized|NotAuthenticated|status: [0-9]{3}|code:' /tmp/apply.log | tail -n 50
-              echo 'OCI_ERROR_SUMMARY_END'
-              echo 'ERROR_BLOCK_END'
-            } > "$GITHUB_WORKSPACE/oracle-priority-repair-result.txt"
+            echo 'PUBLIC_HTTPS_HEALTH=not_tested_dns_unresolved'
           fi
-          exit 0
 
-      - name: Persist repair result
+          echo 'GATEWAY_VERIFICATION_END'
+          [ "$dns_ok" -eq 1 ] && [ "$service_ok" -eq 1 ]
+
+      - name: Persist verification result
         if: always()
         shell: bash
         run: |
           set -Eeuo pipefail
-          test -f oracle-priority-repair-result.txt || echo 'APPLY_STATUS=no_result' > oracle-priority-repair-result.txt
+          test -f gateway-dns-health-verification.txt || echo 'Verification did not produce a result.' > gateway-dns-health-verification.txt
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add oracle-priority-repair-result.txt
-          git diff --cached --quiet || git commit -m 'Record E2 priority repair result'
+          git add gateway-dns-health-verification.txt
+          git diff --cached --quiet || git commit -m 'Record gateway DNS and health verification'
           git push origin HEAD:oracle-resource-audit
-
-      - name: Mark unsuccessful apply
-        shell: bash
-        run: grep -q '^APPLY_STATUS=success$' oracle-priority-repair-result.txt
