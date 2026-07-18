@@ -1,13 +1,18 @@
-ORACLE_TENANCY_AUDIT_BEGIN
+ORACLE_INSTANCE_AUDIT_BEGIN
 REGION=ap-mumbai-1
 TARGET_PUBLIC_IP=161.118.187.93
-RESOURCE_SEARCH_BEGIN
-RESOURCE_SEARCH_COUNT=0
-RESOURCE_SEARCH_END
-DIRECT_INSTANCE_LIST_BEGIN
-INSTANCE_LIST_DENIED compartment=ROOT_TENANCY error=d or requested resource not found.",     "opc-request-id": "2343A8BB82244836A57C98FE5F8FC372/3E2DDE41DC166F79BBFC5A6A424F4D54/BF0DC819BE9DB20E0FA0A0BC4FB6E073",     "operation_name": "list_instances",     "request_endpoint": "GET https://iaas.ap-mumbai-1.oraclecloud.com/20160918/instances",     "status": 404,     "target_service": "compute",     "timestamp": "2026-07-18T04:10:35.628798+00:00",     "troubleshooting_tips": "See [https://docs.oracle.com/iaas/Content/API/References/apierrors.htm] for more information about resolving this error. If you are unable to resolve this issue, run this CLI command with --debug option and contact Oracle support and provide them the full error message." } 
-DIRECT_INSTANCE_LIST_END
-VISIBLE_ACTIVE_INSTANCE_COUNT=0
-DENIED_COMPARTMENT_COUNT=1
-TARGET_FOUND=0
-ORACLE_TENANCY_AUDIT_END
+INSTANCE compartment=ROOT_TENANCY name=nams-phase1 state=RUNNING shape=VM.Standard.E2.1.Micro ocpus=1.0 memory_gb=1.0 public_ip=161.118.187.93 ad=BXVV:AP-MUMBAI-1-AD-1 created=2026-07-08T17:12:20.611000+00:00
+TARGET_MATCH=yes
+TARGET_COMPARTMENT=ROOT_TENANCY
+TARGET_INSTANCE_NAME=nams-phase1
+TARGET_INSTANCE_STATE=RUNNING
+TARGET_INSTANCE_SHAPE=VM.Standard.E2.1.Micro
+TARGET_OCPUS=1.0
+TARGET_MEMORY_GB=1.0
+TARGET_PUBLIC_IP=161.118.187.93
+TARGET_CREATED=2026-07-08T17:12:20.611000+00:00
+TARGET_BOOT_VOLUME_COUNT=1
+VISIBLE_ACTIVE_INSTANCE_COUNT=1
+DENIED_COMPARTMENT_COUNT=0
+TARGET_FOUND=1
+ORACLE_INSTANCE_AUDIT_END
