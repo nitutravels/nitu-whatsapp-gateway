@@ -1,23 +1,7 @@
-APPLY_STATUS=failed
-ERROR_BLOCK_BEGIN
-Error: 500-InternalError, Out of host capacity.
-Suggestion: The service for this resource encountered an error. Please contact support for help with service: Core Instance
-Documentation: https://registry.terraform.io/providers/oracle/oci/latest/docs/resources/core_instance 
-API Reference: https://docs.oracle.com/iaas/api/#/en/iaas/20160918/Instance/LaunchInstance 
-Request Target: POST https://iaas.ap-mumbai-1.oraclecloud.com/20160918/instances 
-Provider version: 8.23.0, released on 2026-07-14.  
-Service: Core Instance 
-Operation Name: LaunchInstance 
-OPC request ID: a1ced768426fc7983f7d19b1bfe84086/3B85A0C5138FA7C289525B6A424F4D84/529B5342C265ED5BF5B1D7D0E0D688BE 
-
-
-  with oci_core_instance.gateway,
-  on compute.tf line 1, in resource "oci_core_instance" "gateway":
-   1: resource "oci_core_instance" "gateway" {
-
-Releasing state lock. This may take a few moments...
-::error::Terraform exited with code 1.
-OCI_ERROR_SUMMARY_BEGIN
-Error: 500-InternalError, Out of host capacity.
-OCI_ERROR_SUMMARY_END
-ERROR_BLOCK_END
+APPLY_STATUS=success
+IMAGE_PLATFORM=linux/amd64
+INSTANCE_SHAPE=VM.Standard.E2.1.Micro
+PUBLIC_IP=137.23.58.166
+DASHBOARD_URL=https://wa.nitutravels.in/admin
+HEALTH_URL=https://wa.nitutravels.in/healthz
+INSTANCE_ID=ocid1.instance.oc1.ap-mumbai-1.anrg6ljr724yghqc4d6hgbco7f5bbllsi6wfqjxlgust5idcqcrcouf2kmoq
