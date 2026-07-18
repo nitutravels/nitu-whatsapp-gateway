@@ -216,8 +216,7 @@ jobs:
               --namespace-name "$OCI_RESOLVED_NAMESPACE" \
               --bucket-name "$STATE_BUCKET" \
               --public-access-type NoPublicAccess \
-              --versioning Enabled \
-              --force >/dev/null
+              --versioning Enabled >/dev/null
           fi
       - name: Set container image variable
         shell: bash
