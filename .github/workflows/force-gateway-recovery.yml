@@ -1,6 +1,5 @@
 name: Priority WhatsApp gateway recovery
 
-# Priority execution trigger using Oracle's nested content.source schema.
 on:
   push:
     branches: [main]
@@ -50,7 +49,7 @@ jobs:
       - name: Install OCI CLI
         run: pipx install --quiet oci-cli
 
-      - name: Install exact image and verify readiness
+      - name: Recover browser profile and pairing screen
         shell: bash
         env:
           COMPARTMENT_OCID: ${{ vars.OCI_COMPARTMENT_OCID }}
@@ -61,6 +60,8 @@ jobs:
           set -Eeuo pipefail
           exec > >(tee docs/priority-gateway-recovery-result.txt) 2>&1
           echo 'PRIORITY_GATEWAY_RECOVERY_BEGIN'
+          echo "SOURCE_COMMIT=${GITHUB_SHA}"
+
           instance_id="$(oci compute instance list \
             --compartment-id "$COMPARTMENT_OCID" \
             --display-name nitu-whatsapp-gateway \
@@ -73,45 +74,166 @@ jobs:
             exit 1
           fi
 
-          cat > /tmp/remote-recover.sh <<REMOTE
+          cat > /tmp/remote-recover.sh <<'REMOTE_SCRIPT'
           set -Eeuo pipefail
-          target_image='$IMAGE'
           cd /opt/nitu-wa
-          for attempt in \$(seq 1 40); do
-            if docker pull "\$target_image" >/tmp/nitu-wa-pull.log 2>&1; then
+          target_image='__TARGET_IMAGE__'
+          phone_number='918901066699'
+          admin_token="$(grep '^ADMIN_TOKEN=' .env | cut -d= -f2-)"
+          auth_root="$(pwd)/data/auth"
+          session_root="$auth_root/session-primary"
+
+          status_json() {
+            curl -fsS --max-time 12 \
+              -H "Authorization: Bearer $admin_token" \
+              http://127.0.0.1:3000/admin/api/status 2>/dev/null || true
+          }
+
+          stop_gateway() {
+            docker compose --env-file .env stop -t 30 gateway >/dev/null 2>&1 || true
+            docker compose --env-file .env rm -f gateway >/dev/null 2>&1 || true
+            docker rm -f nitu-wa-gateway >/dev/null 2>&1 || true
+            sleep 3
+          }
+
+          clear_transient_profile_files() {
+            mkdir -p "$auth_root"
+            if [ -d "$session_root" ]; then
+              find "$session_root" -type f \( \
+                -name SingletonLock -o -name SingletonCookie -o -name SingletonSocket \
+              \) -delete 2>/dev/null || true
+              find "$session_root" -type d \( \
+                -name Cache -o -name 'Code Cache' -o -name GPUCache -o \
+                -name DawnCache -o -name GrShaderCache -o -name ShaderCache \
+              \) -prune -exec rm -rf {} + 2>/dev/null || true
+            fi
+            chown -R 1000:1000 data 2>/dev/null || true
+          }
+
+          start_gateway() {
+            docker compose --env-file .env up -d --force-recreate --no-deps gateway
+          }
+
+          wait_for_api() {
+            for attempt in $(seq 1 36); do
+              body="$(status_json)"
+              [ -n "$body" ] && return 0
+              sleep 5
+            done
+            return 1
+          }
+
+          wait_for_pairing_or_ready() {
+            for attempt in $(seq 1 48); do
+              body="$(status_json)"
+              status="$(printf '%s' "$body" | jq -r '.status // empty' 2>/dev/null || true)"
+              ready="$(printf '%s' "$body" | jq -r '.ready // false' 2>/dev/null || true)"
+              has_qr="$(printf '%s' "$body" | jq -r '((.qrDataUrl // "") | length) > 20' 2>/dev/null || echo false)"
+              has_code="$(printf '%s' "$body" | jq -r '((.pairingCode // "") | length) >= 8' 2>/dev/null || echo false)"
+              echo "WAIT_ATTEMPT=$attempt STATUS=${status:-unreachable} READY=$ready HAS_QR=$has_qr HAS_CODE=$has_code"
+              if [ "$ready" = true ] || { [ "$status" = awaiting_pairing ] && { [ "$has_qr" = true ] || [ "$has_code" = true ]; }; }; then
+                return 0
+              fi
+              sleep 5
+            done
+            return 1
+          }
+
+          echo 'STEP=stop_existing_gateway'
+          stop_gateway
+          clear_transient_profile_files
+
+          echo 'STEP=pull_exact_image'
+          for attempt in $(seq 1 40); do
+            if docker pull "$target_image" >/tmp/nitu-wa-pull.log 2>&1; then
               break
             fi
-            if [ "\$attempt" -eq 40 ]; then
+            if [ "$attempt" -eq 40 ]; then
               cat /tmp/nitu-wa-pull.log >&2
               exit 21
             fi
             sleep 15
           done
-          docker tag "\$target_image" ghcr.io/nitutravels/nitu-whatsapp-gateway:latest
-          docker compose --env-file .env up -d --force-recreate --no-deps gateway
-          for attempt in \$(seq 1 30); do
-            status=\$(curl -fsS --max-time 10 -H "Authorization: Bearer \$(grep '^ADMIN_TOKEN=' .env | cut -d= -f2-)" http://127.0.0.1:3000/admin/api/status 2>/dev/null | jq -r '.status // empty' || true)
-            [ "\$status" = ready ] && exit 0
-            sleep 10
-          done
-          docker logs --tail 120 nitu-wa-gateway >&2 || true
-          exit 22
-          REMOTE
+          docker tag "$target_image" ghcr.io/nitutravels/nitu-whatsapp-gateway:latest
+
+          echo 'STEP=start_with_preserved_session'
+          start_gateway
+          wait_for_api || { docker logs --tail 160 nitu-wa-gateway >&2 || true; exit 22; }
+          sleep 20
+          body="$(status_json)"
+          status="$(printf '%s' "$body" | jq -r '.status // empty' 2>/dev/null || true)"
+          last_error="$(printf '%s' "$body" | jq -r '.lastError // ""' 2>/dev/null || true)"
+          echo "PRESERVED_SESSION_STATUS=${status:-unknown}"
+          echo "PRESERVED_SESSION_ERROR_PRESENT=$([ -n "$last_error" ] && echo yes || echo no)"
+
+          if [ "$status" = error ] || [ "$status" = auth_failure ] || [ "$status" = disconnected ]; then
+            echo 'STEP=archive_invalid_session'
+            stop_gateway
+            stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+            if [ -d "$session_root" ]; then
+              mv "$session_root" "$auth_root/session-primary.recovery-$stamp"
+              echo "SESSION_ARCHIVED=session-primary.recovery-$stamp"
+            fi
+            find "$auth_root" -maxdepth 1 -type d -name 'session-primary.recovery-*' -printf '%T@ %p\n' 2>/dev/null \
+              | sort -rn | awk 'NR>3 {sub(/^[^ ]+ /, ""); print}' \
+              | xargs -r rm -rf
+            clear_transient_profile_files
+            start_gateway
+            wait_for_api || { docker logs --tail 160 nitu-wa-gateway >&2 || true; exit 23; }
+          fi
+
+          if ! wait_for_pairing_or_ready; then
+            docker logs --tail 200 nitu-wa-gateway >&2 || true
+            exit 24
+          fi
+
+          body="$(status_json)"
+          status="$(printf '%s' "$body" | jq -r '.status // empty' 2>/dev/null || true)"
+          ready="$(printf '%s' "$body" | jq -r '.ready // false' 2>/dev/null || true)"
+          if [ "$ready" != true ] && [ "$status" = awaiting_pairing ]; then
+            echo 'STEP=request_phone_pairing_code'
+            pair_response="$(curl -sS --max-time 90 -X POST \
+              -H "Authorization: Bearer $admin_token" \
+              -H 'content-type: application/json' \
+              --data "{\"phoneNumber\":\"$phone_number\"}" \
+              http://127.0.0.1:3000/admin/api/pair || true)"
+            pair_ok="$(printf '%s' "$pair_response" | jq -r '((.pairingCode // "") | length) >= 8' 2>/dev/null || echo false)"
+            pair_error="$(printf '%s' "$pair_response" | jq -r '.error // ""' 2>/dev/null || true)"
+            echo "PAIR_REQUEST_OK=$pair_ok"
+            echo "PAIR_REQUEST_ERROR_PRESENT=$([ -n "$pair_error" ] && echo yes || echo no)"
+            sleep 5
+          fi
+
+          final="$(status_json)"
+          printf '%s' "$final" | jq -c '{status,ready,account,hasQr:((.qrDataUrl // "")|length>20),hasPairingCode:((.pairingCode // "")|length>=8),lastErrorPresent:((.lastError // "")|length>0),queue}'
+          final_ready="$(printf '%s' "$final" | jq -r '.ready // false')"
+          final_status="$(printf '%s' "$final" | jq -r '.status // empty')"
+          final_qr="$(printf '%s' "$final" | jq -r '((.qrDataUrl // "") | length) > 20')"
+          final_code="$(printf '%s' "$final" | jq -r '((.pairingCode // "") | length) >= 8')"
+          if [ "$final_ready" = true ] || { [ "$final_status" = awaiting_pairing ] && { [ "$final_qr" = true ] || [ "$final_code" = true ]; }; }; then
+            exit 0
+          fi
+          docker logs --tail 200 nitu-wa-gateway >&2 || true
+          exit 25
+          REMOTE_SCRIPT
+
+          sed -i "s|__TARGET_IMAGE__|$IMAGE|g" /tmp/remote-recover.sh
           encoded="$(base64 -w0 /tmp/remote-recover.sh)"
-          jq -n --arg text "printf '%s' '$encoded' | base64 -d | bash" '{source:{sourceType:"TEXT",text:$text},output:{outputType:"TEXT"}}' > /tmp/content.json
+          jq -n --arg text "printf '%s' '$encoded' | base64 -d | bash" \
+            '{source:{sourceType:"TEXT",text:$text},output:{outputType:"TEXT"}}' > /tmp/content.json
           jq -n --arg id "$instance_id" '{instanceId:$id}' > /tmp/target.json
 
           command_id="$(oci instance-agent command create \
             --compartment-id "$COMPARTMENT_OCID" \
             --content file:///tmp/content.json \
             --target file:///tmp/target.json \
-            --timeout-in-seconds 1200 \
-            --display-name 'Nitu WhatsApp priority recovery' \
+            --timeout-in-seconds 1800 \
+            --display-name 'Nitu WhatsApp browser and pairing recovery' \
             --query 'data.id' --raw-output)"
           echo 'INSTANCE_COMMAND_CREATED=yes'
 
           execution_state=''
-          for attempt in $(seq 1 80); do
+          for attempt in $(seq 1 120); do
             execution_json="$(oci instance-agent command-execution get --command-id "$command_id" --instance-id "$instance_id" --output json)"
             execution_state="$(jq -r '.data."lifecycle-state" // empty' <<<"$execution_json")"
             echo "COMMAND_ATTEMPT=$attempt STATE=$execution_state"
@@ -126,19 +248,23 @@ jobs:
           verified=0
           for attempt in $(seq 1 36); do
             health_code="$(curl -sS --connect-timeout 10 --max-time 30 -o /tmp/health.json -w '%{http_code}' "https://$DOMAIN/healthz" || echo 000)"
-            ready_code="$(curl -sS --connect-timeout 10 --max-time 30 -o /tmp/ready.json -w '%{http_code}' "https://$DOMAIN/readyz" || echo 000)"
             status_code="$(curl -sS --connect-timeout 10 --max-time 30 -H "Authorization: Bearer $ADMIN_TOKEN" -o /tmp/status.json -w '%{http_code}' "https://$DOMAIN/admin/api/status" || echo 000)"
             status="$(jq -r '.status // "unknown"' /tmp/status.json 2>/dev/null || echo unknown)"
             is_ready="$(jq -r '.ready // false' /tmp/status.json 2>/dev/null || echo false)"
+            has_qr="$(jq -r '((.qrDataUrl // "") | length) > 20' /tmp/status.json 2>/dev/null || echo false)"
+            has_code="$(jq -r '((.pairingCode // "") | length) >= 8' /tmp/status.json 2>/dev/null || echo false)"
             last_error="$(jq -r '.lastError // ""' /tmp/status.json 2>/dev/null || true)"
-            echo "VERIFY_ATTEMPT=$attempt HEALTH_HTTP=$health_code READY_HTTP=$ready_code STATUS_HTTP=$status_code STATUS=$status READY=$is_ready LAST_ERROR_PRESENT=$([ -n "$last_error" ] && echo yes || echo no)"
-            if [ "$health_code" = 200 ] && [ "$ready_code" = 200 ] && [ "$status_code" = 200 ] && [ "$status" = ready ] && [ "$is_ready" = true ] && [ -z "$last_error" ]; then
-              verified=1
-              break
+            echo "VERIFY_ATTEMPT=$attempt HEALTH_HTTP=$health_code STATUS_HTTP=$status_code STATUS=$status READY=$is_ready HAS_QR=$has_qr HAS_CODE=$has_code LAST_ERROR_PRESENT=$([ -n "$last_error" ] && echo yes || echo no)"
+            if [ "$health_code" = 200 ] && [ "$status_code" = 200 ]; then
+              if [ "$is_ready" = true ] || { [ "$status" = awaiting_pairing ] && { [ "$has_qr" = true ] || [ "$has_code" = true ]; }; }; then
+                verified=1
+                break
+              fi
             fi
             sleep 10
           done
-          echo -n 'FINAL_STATUS='; jq -c '{status,ready,account,lastError,queue}' /tmp/status.json 2>/dev/null || cat /tmp/status.json; echo
+
+          echo -n 'FINAL_STATUS='; jq -c '{status,ready,account,hasQr:((.qrDataUrl // "")|length>20),hasPairingCode:((.pairingCode // "")|length>=8),lastErrorPresent:((.lastError // "")|length>0),queue}' /tmp/status.json 2>/dev/null || cat /tmp/status.json; echo
           if [ "$verified" -eq 1 ]; then
             echo 'RECOVERY_RESULT=success'
           else
@@ -156,5 +282,5 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add docs/priority-gateway-recovery-result.txt
-          git diff --cached --quiet || git commit -m 'Record priority WhatsApp recovery result'
+          git diff --cached --quiet || git commit -m 'Record browser and pairing recovery result'
           git push origin HEAD:main
