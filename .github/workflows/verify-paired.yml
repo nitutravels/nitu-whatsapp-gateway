@@ -1,0 +1,67 @@
+name: Verify paired WhatsApp gateway
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/verify-paired.yml']
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Verify paired session and authenticated APIs
+        shell: bash
+        env:
+          DOMAIN: wa.nitutravels.in
+          ADMIN_TOKEN: ${{ secrets.GATEWAY_ADMIN_TOKEN }}
+        run: |
+          set -Eeuo pipefail
+          exec > >(tee docs/gateway-paired-verification.txt) 2>&1
+          echo 'PAIRED_GATEWAY_VERIFICATION_BEGIN'
+
+          health_code="$(curl -sS --connect-timeout 10 --max-time 30 -o /tmp/health.json -w '%{http_code}' "https://$DOMAIN/healthz")"
+          ready_code="$(curl -sS --connect-timeout 10 --max-time 30 -o /tmp/ready.json -w '%{http_code}' "https://$DOMAIN/readyz")"
+          status_code="$(curl -sS --connect-timeout 10 --max-time 30 -H "Authorization: Bearer $ADMIN_TOKEN" -o /tmp/status.json -w '%{http_code}' "https://$DOMAIN/admin/api/status")"
+          messages_code="$(curl -sS --connect-timeout 10 --max-time 30 -H "Authorization: Bearer $ADMIN_TOKEN" -o /tmp/messages.json -w '%{http_code}' "https://$DOMAIN/admin/api/messages?limit=5")"
+
+          echo "HEALTH_HTTP=$health_code"
+          echo "READY_HTTP=$ready_code"
+          echo "ADMIN_STATUS_HTTP=$status_code"
+          echo "QUEUE_LIST_HTTP=$messages_code"
+          echo -n 'HEALTH_BODY='; jq -c . /tmp/health.json 2>/dev/null || cat /tmp/health.json; echo
+          echo -n 'READY_BODY='; jq -c . /tmp/ready.json 2>/dev/null || cat /tmp/ready.json; echo
+          echo -n 'ADMIN_STATUS_BODY='; jq -c . /tmp/status.json 2>/dev/null || cat /tmp/status.json; echo
+          echo -n 'QUEUE_SUMMARY='; jq -c '{type:(type),count:(if type=="array" then length else null end),sampleStatuses:(if type=="array" then [.[].status] | unique else [] end)}' /tmp/messages.json 2>/dev/null || echo '{"parse":"failed"}'; echo
+
+          ready_value="$(jq -r '.ready // false' /tmp/ready.json 2>/dev/null || echo false)"
+          gateway_ready="$(jq -r '.ready // false' /tmp/status.json 2>/dev/null || echo false)"
+          gateway_status="$(jq -r '.status // "unknown"' /tmp/status.json 2>/dev/null || echo unknown)"
+          echo "READY_VALUE=$ready_value"
+          echo "GATEWAY_READY=$gateway_ready"
+          echo "GATEWAY_STATUS=$gateway_status"
+
+          if [ "$health_code" = '200' ] && [ "$ready_code" = '200' ] && [ "$status_code" = '200' ] && [ "$messages_code" = '200' ] && [ "$ready_value" = 'true' ] && [ "$gateway_ready" = 'true' ]; then
+            echo 'PAIRED_GATEWAY_VERIFIED=yes'
+          else
+            echo 'PAIRED_GATEWAY_VERIFIED=no'
+            exit 1
+          fi
+          echo 'PAIRED_GATEWAY_VERIFICATION_END'
+
+      - name: Persist paired verification
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -f docs/gateway-paired-verification.txt || echo 'Verification did not produce a result.' > docs/gateway-paired-verification.txt
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/gateway-paired-verification.txt
+          git diff --cached --quiet || git commit -m 'Record paired WhatsApp gateway verification'
+          git push origin HEAD:main
