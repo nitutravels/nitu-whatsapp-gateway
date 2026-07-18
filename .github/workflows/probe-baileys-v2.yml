@@ -1,0 +1,134 @@
+name: Probe live Baileys v2 gateway
+
+on:
+  push:
+    branches: [status/baileys-v2]
+    paths:
+      - '.github/workflows/probe-baileys-v2.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: status/baileys-v2
+
+      - name: Configure OCI credentials
+        shell: bash
+        env:
+          OCI_PRIVATE_KEY_PEM: ${{ secrets.OCI_PRIVATE_KEY }}
+          OCI_FINGERPRINT_VALUE: ${{ secrets.OCI_FINGERPRINT }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$HOME/.oci"
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          value = os.environ.get('OCI_PRIVATE_KEY_PEM', '').strip()
+          if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+              value = value[1:-1]
+          if '\\n' in value and '\n' not in value:
+              value = value.replace('\\r', '').replace('\\n', '\n')
+          Path.home().joinpath('.oci/key.pem').write_text(value.replace('\r', '').strip() + '\n', encoding='utf-8')
+          PY
+          chmod 600 "$HOME/.oci/key.pem"
+          fingerprint="$(printf '%s' "$OCI_FINGERPRINT_VALUE" | tr -d '[:space:]')"
+          cat > "$HOME/.oci/config" <<EOF
+          [DEFAULT]
+          user=${{ secrets.OCI_USER_OCID }}
+          fingerprint=$fingerprint
+          tenancy=${{ secrets.OCI_TENANCY_OCID }}
+          region=${{ vars.OCI_REGION }}
+          key_file=$HOME/.oci/key.pem
+          EOF
+          chmod 600 "$HOME/.oci/config"
+
+      - name: Probe production gateway
+        id: probe
+        shell: bash
+        env:
+          COMPARTMENT_OCID: ${{ vars.OCI_COMPARTMENT_OCID }}
+          DOMAIN: ${{ vars.GATEWAY_DOMAIN || 'wa.nitutravels.in' }}
+          ADMIN_TOKEN: ${{ secrets.GATEWAY_ADMIN_TOKEN }}
+        run: |
+          set -u
+          mkdir -p docs
+          exec > >(tee docs/live-baileys-v2-status.txt) 2>&1
+          echo 'LIVE_BAILEYS_V2_PROBE_BEGIN'
+          echo "PROBE_STARTED_AT=$(date -u +%FT%TZ)"
+          pipx install --quiet oci-cli || true
+
+          instance_id="$(oci compute instance list --compartment-id "$COMPARTMENT_OCID" \
+            --display-name nitu-whatsapp-gateway --all \
+            --query 'data[?"lifecycle-state"!=`TERMINATED`].id | [0]' --raw-output 2>/dev/null || true)"
+          public_ip=''
+          if [[ "$instance_id" =~ ^ocid1\.instance\. ]]; then
+            vnic_id="$(oci compute vnic-attachment list --compartment-id "$COMPARTMENT_OCID" \
+              --instance-id "$instance_id" --all \
+              --query 'data[?"lifecycle-state"==`ATTACHED`]."vnic-id" | [0]' --raw-output 2>/dev/null || true)"
+            if [[ "$vnic_id" =~ ^ocid1\.vnic\. ]]; then
+              public_ip="$(oci network vnic get --vnic-id "$vnic_id" --query 'data."public-ip"' --raw-output 2>/dev/null || true)"
+            fi
+          fi
+          echo "PUBLIC_IP_RESOLVED=$([[ "$public_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && echo yes || echo no)"
+
+          success=0
+          final='{}'
+          for attempt in $(seq 1 180); do
+            rm -f /tmp/health.json /tmp/status.json
+            args=(--silent --show-error --connect-timeout 8 --max-time 20)
+            if [[ "$public_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              args+=(--resolve "$DOMAIN:443:$public_ip")
+            fi
+            health_code="$(curl "${args[@]}" -o /tmp/health.json -w '%{http_code}' "https://$DOMAIN/healthz" 2>/dev/null || true)"
+            status_code="$(curl "${args[@]}" -H "Authorization: Bearer $ADMIN_TOKEN" \
+              -o /tmp/status.json -w '%{http_code}' "https://$DOMAIN/admin/api/status" 2>/dev/null || true)"
+            engine="$(jq -r '.engine // "unknown"' /tmp/status.json 2>/dev/null || echo unknown)"
+            phase="$(jq -r '.phase // "unknown"' /tmp/status.json 2>/dev/null || echo unknown)"
+            ready="$(jq -r '.ready // false' /tmp/status.json 2>/dev/null || echo false)"
+            has_qr="$(jq -r '((.qrDataUrl // "") | length) > 20' /tmp/status.json 2>/dev/null || echo false)"
+            has_code="$(jq -r '((.pairingCode // "") | length) >= 8' /tmp/status.json 2>/dev/null || echo false)"
+            echo "ATTEMPT=$attempt HEALTH_HTTP=${health_code:-000} STATUS_HTTP=${status_code:-000} ENGINE=$engine PHASE=$phase READY=$ready HAS_QR=$has_qr HAS_CODE=$has_code"
+            if [ "$status_code" = 200 ] && [ -s /tmp/status.json ]; then
+              final="$(cat /tmp/status.json)"
+            fi
+            if [ "$health_code" = 200 ] && [ "$status_code" = 200 ] && [ "$engine" = baileys-websocket ] && \
+              { [ "$ready" = true ] || { [ "$phase" = pairing ] && { [ "$has_qr" = true ] || [ "$has_code" = true ]; }; }; }; then
+              success=1
+              break
+            fi
+            sleep 10
+          done
+
+          echo -n 'FINAL_STATUS='
+          printf '%s' "$final" | jq -c '{engine,engineVersion,status,phase,ready,connected,registered,account,hasQr:((.qrDataUrl // "")|length>20),hasPairingCode:((.pairingCode // "")|length>=8),lastOpenAt,lastCloseAt,lastHeartbeatAt,reconnectAttempts,reconnectAt,queue,worker,lastErrorPresent:((.lastError // "")|length>0)}' 2>/dev/null || printf '%s\n' "$final"
+          if [ "$success" -eq 1 ]; then
+            echo 'PROBE_RESULT=success'
+          else
+            echo 'PROBE_RESULT=failed'
+          fi
+          echo "PROBE_FINISHED_AT=$(date -u +%FT%TZ)"
+          echo 'LIVE_BAILEYS_V2_PROBE_END'
+          echo "success=$success" >> "$GITHUB_OUTPUT"
+
+      - name: Persist probe result
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -f docs/live-baileys-v2-status.txt || echo 'Probe did not produce output.' > docs/live-baileys-v2-status.txt
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/live-baileys-v2-status.txt
+          git diff --cached --quiet || git commit -m 'Record live Baileys v2 gateway status'
+          git push origin HEAD:status/baileys-v2
+
+      - name: Enforce probe result
+        if: steps.probe.outputs.success != '1'
+        run: exit 1
