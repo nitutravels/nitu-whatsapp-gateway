@@ -1,0 +1,83 @@
+name: Record live Baileys v2 status
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/record-live-baileys-status.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: status/baileys-v2
+      - name: Configure OCI credentials
+        shell: bash
+        env:
+          OCI_PRIVATE_KEY_PEM: ${{ secrets.OCI_PRIVATE_KEY }}
+          OCI_FINGERPRINT_VALUE: ${{ secrets.OCI_FINGERPRINT }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$HOME/.oci"
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          value = os.environ.get('OCI_PRIVATE_KEY_PEM', '').strip()
+          if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+              value = value[1:-1]
+          if '\\n' in value and '\n' not in value:
+              value = value.replace('\\r', '').replace('\\n', '\n')
+          Path.home().joinpath('.oci/key.pem').write_text(value.replace('\r', '').strip() + '\n', encoding='utf-8')
+          PY
+          chmod 600 "$HOME/.oci/key.pem"
+          fingerprint="$(printf '%s' "$OCI_FINGERPRINT_VALUE" | tr -d '[:space:]')"
+          cat > "$HOME/.oci/config" <<EOF
+          [DEFAULT]
+          user=${{ secrets.OCI_USER_OCID }}
+          fingerprint=$fingerprint
+          tenancy=${{ secrets.OCI_TENANCY_OCID }}
+          region=${{ vars.OCI_REGION }}
+          key_file=$HOME/.oci/key.pem
+          EOF
+          chmod 600 "$HOME/.oci/config"
+          pipx install --quiet oci-cli
+      - name: Capture sanitized live status
+        shell: bash
+        env:
+          COMPARTMENT_OCID: ${{ vars.OCI_COMPARTMENT_OCID }}
+          DOMAIN: ${{ vars.GATEWAY_DOMAIN || 'wa.nitutravels.in' }}
+          ADMIN_TOKEN: ${{ secrets.GATEWAY_ADMIN_TOKEN }}
+        run: |
+          set -Eeuo pipefail
+          instance_id="$(oci compute instance list --compartment-id "$COMPARTMENT_OCID" --display-name nitu-whatsapp-gateway --all --query 'data[?"lifecycle-state"!=`TERMINATED`].id | [0]' --raw-output)"
+          vnic_id="$(oci compute vnic-attachment list --compartment-id "$COMPARTMENT_OCID" --instance-id "$instance_id" --all --query 'data[?"lifecycle-state"==`ATTACHED`]."vnic-id" | [0]' --raw-output)"
+          public_ip="$(oci network vnic get --vnic-id "$vnic_id" --query 'data."public-ip"' --raw-output)"
+          mkdir -p docs
+          for attempt in $(seq 1 30); do
+            health_code="$(curl -sS --connect-timeout 8 --max-time 20 --resolve "$DOMAIN:443:$public_ip" -o /tmp/health.json -w '%{http_code}' "https://$DOMAIN/healthz" || true)"
+            status_code="$(curl -sS --connect-timeout 8 --max-time 20 --resolve "$DOMAIN:443:$public_ip" -H "Authorization: Bearer $ADMIN_TOKEN" -o /tmp/status.json -w '%{http_code}' "https://$DOMAIN/admin/api/status" || true)"
+            engine="$(jq -r '.engine // "unknown"' /tmp/status.json 2>/dev/null || echo unknown)"
+            if [ "$health_code" = 200 ] && [ "$status_code" = 200 ] && [ "$engine" = baileys-websocket ]; then
+              jq '{capturedAt:(now|todate),healthHttp:200,statusHttp:200,engine,engineVersion,status,phase,ready,connected,registered,account,hasQr:((.qrDataUrl // "")|length>20),hasPairingCode:((.pairingCode // "")|length>=8),lastOpenAt,lastCloseAt,lastHeartbeatAt,lastHeartbeatError,reconnectAttempts,reconnectAt,queue,worker,lastErrorPresent:((.lastError // "")|length>0),lastDisconnectCode}' /tmp/status.json > docs/live-baileys-v2-final.json
+              exit 0
+            fi
+            sleep 10
+          done
+          jq -n --arg capturedAt "$(date -u +%FT%TZ)" --argjson health "${health_code:-0}" --argjson status "${status_code:-0}" '{capturedAt:$capturedAt,healthHttp:$health,statusHttp:$status,engine:"not-confirmed"}' > docs/live-baileys-v2-final.json
+          exit 1
+      - name: Commit sanitized status
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/live-baileys-v2-final.json
+          git diff --cached --quiet || git commit -m 'Record final live Baileys v2 status'
+          git push origin HEAD:status/baileys-v2
