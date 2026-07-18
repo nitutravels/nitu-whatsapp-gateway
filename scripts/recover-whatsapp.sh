@@ -2,7 +2,6 @@
 set -Eeuo pipefail
 
 target_image="${1:?Target image is required}"
-phone_number="${2:-918901066699}"
 cd /opt/nitu-wa
 
 admin_token="$(grep '^ADMIN_TOKEN=' .env | cut -d= -f2-)"
@@ -50,16 +49,15 @@ wait_for_api() {
   return 1
 }
 
-wait_for_pairing_or_ready() {
-  local attempts="${1:-48}"
+wait_for_qr_or_ready() {
+  local attempts="${1:-60}"
   for attempt in $(seq 1 "$attempts"); do
     body="$(status_json)"
     status="$(printf '%s' "$body" | jq -r '.status // empty' 2>/dev/null || true)"
     ready="$(printf '%s' "$body" | jq -r '.ready // false' 2>/dev/null || true)"
     has_qr="$(printf '%s' "$body" | jq -r '((.qrDataUrl // "") | length) > 20' 2>/dev/null || echo false)"
-    has_code="$(printf '%s' "$body" | jq -r '((.pairingCode // "") | length) >= 8' 2>/dev/null || echo false)"
-    echo "WAIT_ATTEMPT=$attempt STATUS=${status:-unreachable} READY=$ready HAS_QR=$has_qr HAS_CODE=$has_code"
-    if [ "$ready" = true ] || { [ "$status" = awaiting_pairing ] && { [ "$has_qr" = true ] || [ "$has_code" = true ]; }; }; then
+    echo "WAIT_ATTEMPT=$attempt STATUS=${status:-unreachable} READY=$ready HAS_QR=$has_qr"
+    if [ "$ready" = true ] || { [ "$status" = awaiting_pairing ] && [ "$has_qr" = true ]; }; then
       return 0
     fi
     sleep 5
@@ -99,7 +97,7 @@ clear_transient_profile_files
 start_gateway
 wait_for_api 36 || { docker logs --tail 160 nitu-wa-gateway >&2 || true; exit 22; }
 
-if ! wait_for_pairing_or_ready 24; then
+if ! wait_for_qr_or_ready 24; then
   body="$(status_json)"
   status="$(printf '%s' "$body" | jq -r '.status // empty' 2>/dev/null || true)"
   last_error="$(printf '%s' "$body" | jq -r '.lastError // ""' 2>/dev/null || true)"
@@ -109,33 +107,15 @@ if ! wait_for_pairing_or_ready 24; then
   archive_current_session
   start_gateway
   wait_for_api 36 || { docker logs --tail 200 nitu-wa-gateway >&2 || true; exit 23; }
-  wait_for_pairing_or_ready 60 || { docker logs --tail 240 nitu-wa-gateway >&2 || true; exit 24; }
-fi
-
-body="$(status_json)"
-status="$(printf '%s' "$body" | jq -r '.status // empty' 2>/dev/null || true)"
-ready="$(printf '%s' "$body" | jq -r '.ready // false' 2>/dev/null || true)"
-if [ "$ready" != true ] && [ "$status" = awaiting_pairing ]; then
-  echo 'STEP=request_phone_pairing_code'
-  pair_response="$(curl -sS --max-time 90 -X POST \
-    -H "Authorization: Bearer $admin_token" \
-    -H 'content-type: application/json' \
-    --data "{\"phoneNumber\":\"$phone_number\"}" \
-    http://127.0.0.1:3000/admin/api/pair || true)"
-  pair_ok="$(printf '%s' "$pair_response" | jq -r '((.pairingCode // "") | length) >= 8' 2>/dev/null || echo false)"
-  pair_error="$(printf '%s' "$pair_response" | jq -r '.error // ""' 2>/dev/null || true)"
-  echo "PAIR_REQUEST_OK=$pair_ok"
-  echo "PAIR_REQUEST_ERROR_PRESENT=$([ -n "$pair_error" ] && echo yes || echo no)"
-  sleep 5
+  wait_for_qr_or_ready 60 || { docker logs --tail 240 nitu-wa-gateway >&2 || true; exit 24; }
 fi
 
 final="$(status_json)"
-printf '%s' "$final" | jq -c '{status,ready,account,hasQr:((.qrDataUrl // "")|length>20),hasPairingCode:((.pairingCode // "")|length>=8),lastErrorPresent:((.lastError // "")|length>0),queue}'
+printf '%s' "$final" | jq -c '{status,ready,account,hasQr:((.qrDataUrl // "")|length>20),lastErrorPresent:((.lastError // "")|length>0),queue}'
 final_ready="$(printf '%s' "$final" | jq -r '.ready // false')"
 final_status="$(printf '%s' "$final" | jq -r '.status // empty')"
 final_qr="$(printf '%s' "$final" | jq -r '((.qrDataUrl // "") | length) > 20')"
-final_code="$(printf '%s' "$final" | jq -r '((.pairingCode // "") | length) >= 8')"
-if [ "$final_ready" = true ] || { [ "$final_status" = awaiting_pairing ] && { [ "$final_qr" = true ] || [ "$final_code" = true ]; }; }; then
+if [ "$final_ready" = true ] || { [ "$final_status" = awaiting_pairing ] && [ "$final_qr" = true ]; }; then
   exit 0
 fi
 
