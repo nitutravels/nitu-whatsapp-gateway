@@ -1,0 +1,72 @@
+name: Terraform OCI backend diagnostic
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/terraform-init-diagnostic.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    environment: production
+    defaults:
+      run:
+        working-directory: infra/terraform
+    steps:
+      - uses: actions/checkout@v7
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.15.8
+      - name: Configure OCI credentials
+        shell: bash
+        env:
+          OCI_PRIVATE_KEY_PEM: ${{ secrets.OCI_PRIVATE_KEY }}
+          OCI_FINGERPRINT_VALUE: ${{ secrets.OCI_FINGERPRINT }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$HOME/.oci"
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          value = os.environ.get('OCI_PRIVATE_KEY_PEM', '').strip()
+          if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+              value = value[1:-1]
+          if '\\n' in value and '\n' not in value:
+              value = value.replace('\\r', '').replace('\\n', '\n')
+          Path.home().joinpath('.oci/oci_api_key.pem').write_text(value.replace('\r', '').strip() + '\n', encoding='utf-8')
+          PY
+          chmod 600 "$HOME/.oci/oci_api_key.pem"
+          FINGERPRINT="$(printf '%s' "$OCI_FINGERPRINT_VALUE" | tr -d '[:space:]')"
+          cat > "$HOME/.oci/config" <<EOF
+          [DEFAULT]
+          user=${{ secrets.OCI_USER_OCID }}
+          fingerprint=$FINGERPRINT
+          tenancy=${{ secrets.OCI_TENANCY_OCID }}
+          region=${{ vars.OCI_REGION }}
+          key_file=$HOME/.oci/oci_api_key.pem
+          EOF
+          chmod 600 "$HOME/.oci/config"
+      - name: Diagnose Terraform init
+        shell: bash
+        env:
+          STATE_BUCKET: ${{ vars.OCI_TF_STATE_BUCKET }}
+          OCI_NAMESPACE_VALUE: ${{ vars.OCI_NAMESPACE }}
+        run: |
+          set +e
+          terraform version
+          terraform init -reconfigure \
+            -backend-config="bucket=$STATE_BUCKET" \
+            -backend-config="namespace=$OCI_NAMESPACE_VALUE" \
+            -backend-config="region=${{ vars.OCI_REGION }}" \
+            -backend-config="key=nitu-whatsapp-gateway/terraform.tfstate" \
+            -backend-config="auth=APIKey" \
+            -backend-config="config_file_profile=DEFAULT" \
+            -no-color > /tmp/terraform-init.log 2>&1
+          RC=$?
+          echo "terraform_init_exit=$RC"
+          tail -n 100 /tmp/terraform-init.log
+          exit 1
