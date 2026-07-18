@@ -3,7 +3,7 @@ HEALTH_HTTP=200
 READY_HTTP=200
 ADMIN_STATUS_HTTP=200
 QUEUE_LIST_HTTP=200
-HEALTH_BODY={"ok":true,"service":"nitu-whatsapp-gateway","time":"2026-07-18T10:59:06.486Z"}
+HEALTH_BODY={"ok":true,"service":"nitu-whatsapp-gateway","time":"2026-07-18T10:59:48.217Z"}
 
 READY_BODY={"ready":true,"status":"ready"}
 
