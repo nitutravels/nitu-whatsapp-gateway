@@ -1,5 +1,6 @@
 name: Verify Oracle resources after NAMS retirement
 
+# Recheck after gateway deployment commit f4eedc06 on 2026-07-18.
 on:
   push:
     branches: [oracle-resource-audit]
