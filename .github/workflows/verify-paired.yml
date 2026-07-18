@@ -1,5 +1,6 @@
 name: Verify paired WhatsApp gateway
 
+# Triggered after WhatsApp linked-device pairing confirmation.
 on:
   push:
     branches: [main]
