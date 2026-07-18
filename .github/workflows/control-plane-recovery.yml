@@ -59,7 +59,7 @@ jobs:
           EOF
           chmod 600 "$HOME/.oci/config"
 
-      - name: Install recovery utilities
+      - name: Install deployment utilities
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -67,7 +67,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq dnsutils
 
-      - name: Repair through OCI control plane
+      - name: Deploy Baileys v2 through OCI control plane
         shell: bash
         env:
           COMPARTMENT_OCID: ${{ vars.OCI_COMPARTMENT_OCID }}
@@ -77,18 +77,18 @@ jobs:
         run: |
           set -Eeuo pipefail
           mkdir -p docs
-          chmod 0755 scripts/control-plane-recover.sh
-          scripts/control-plane-recover.sh 2>&1 | tee docs/control-plane-recovery-result.txt
+          chmod 0755 scripts/deploy-baileys-v2.sh
+          scripts/deploy-baileys-v2.sh 2>&1 | tee docs/baileys-v2-deployment-result.txt
 
-      - name: Persist recovery result
+      - name: Persist deployment result
         if: always()
         shell: bash
         run: |
           set -Eeuo pipefail
-          test -f docs/control-plane-recovery-result.txt || \
-            echo 'Recovery did not produce a result file.' > docs/control-plane-recovery-result.txt
+          test -f docs/baileys-v2-deployment-result.txt || \
+            echo 'Deployment did not produce a result file.' > docs/baileys-v2-deployment-result.txt
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add docs/control-plane-recovery-result.txt
-          git diff --cached --quiet || git commit -m 'Record control-plane recovery result'
+          git add docs/baileys-v2-deployment-result.txt
+          git diff --cached --quiet || git commit -m 'Record Baileys v2 deployment result'
           git push origin HEAD:main
