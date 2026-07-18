@@ -17,7 +17,7 @@ jobs:
         with:
           terraform_version: 1.15.8
           terraform_wrapper: false
-      - name: Read remote Terraform outputs
+      - name: Initialize full Terraform project
         shell: bash
         env:
           KEY: ${{ secrets.OCI_PRIVATE_KEY }}
@@ -26,26 +26,16 @@ jobs:
           NS: ${{ vars.OCI_NAMESPACE }}
         run: |
           set +e
-          mkdir -p "$HOME/.oci" /tmp/tf
+          mkdir -p "$HOME/.oci" /tmp/src
           printf '%s\n' "$KEY" > "$HOME/.oci/key.pem"
           chmod 600 "$HOME/.oci/key.pem"
           FP="$(printf '%s' "$FP" | tr -d '[:space:]')"
           printf '[DEFAULT]\nuser=%s\nfingerprint=%s\ntenancy=%s\nregion=%s\nkey_file=%s/.oci/key.pem\n' '${{ secrets.OCI_USER_OCID }}' "$FP" '${{ secrets.OCI_TENANCY_OCID }}' '${{ vars.OCI_REGION }}' "$HOME" > "$HOME/.oci/config"
           chmod 600 "$HOME/.oci/config"
-          printf 'terraform {\n  backend "oci" {}\n}\n' > /tmp/tf/main.tf
-          cd /tmp/tf
-          terraform init -reconfigure -no-color -backend-config="bucket=$BUCKET" -backend-config="namespace=$NS" -backend-config="region=${{ vars.OCI_REGION }}" -backend-config="key=nitu-whatsapp-gateway/terraform.tfstate" -backend-config="auth=APIKey" -backend-config="config_file_profile=DEFAULT" >/dev/null 2>/tmp/init.err
-          echo "init_exit=$?"
-          terraform output -json >/tmp/o.json 2>/tmp/out.err
+          curl -fsSL 'https://github.com/nitutravels/nitu-whatsapp-gateway/archive/8d8f962fc0ee7c0fcfd1b82d5d721481cf80c872.tar.gz' | tar -xz -C /tmp/src --strip-components=1
+          cd /tmp/src/infra/terraform
+          terraform init -reconfigure -no-color -backend-config="bucket=$BUCKET" -backend-config="namespace=$NS" -backend-config="region=${{ vars.OCI_REGION }}" -backend-config="key=nitu-whatsapp-gateway/terraform.tfstate" -backend-config="auth=APIKey" -backend-config="config_file_profile=DEFAULT" >/tmp/init.log 2>&1
           RC=$?
-          echo "output_exit=$RC"
-          if [ "$RC" -eq 0 ]; then
-            echo "public_ip=$(jq -r '.public_ip.value // empty' /tmp/o.json)"
-            echo "dashboard_url=$(jq -r '.dashboard_url.value // empty' /tmp/o.json)"
-            echo "health_url=$(jq -r '.health_url.value // empty' /tmp/o.json)"
-            echo "instance_id_present=$(jq -r 'if (.instance_id.value // "") != "" then "yes" else "no" end' /tmp/o.json)"
-          else
-            tail -n 8 /tmp/init.err
-            tail -n 8 /tmp/out.err
-          fi
+          echo "full_project_init_exit=$RC"
+          tail -n 45 /tmp/init.log
           exit 1
