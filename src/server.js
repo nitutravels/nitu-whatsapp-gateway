@@ -4,9 +4,11 @@ const rateLimit = require('@fastify/rate-limit');
 const config = require('./config');
 const { WhatsAppGateway } = require('./gateway');
 const { installPairingRecovery } = require('./pairing-recovery');
+const { installOperationalReliability } = require('./operational-reliability');
 const { registerRoutes } = require('./routes');
 
 installPairingRecovery(WhatsAppGateway, config);
+installOperationalReliability(WhatsAppGateway);
 
 async function main() {
   const app = Fastify({
