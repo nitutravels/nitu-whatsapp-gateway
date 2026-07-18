@@ -12,52 +12,29 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     environment: production
-    env:
-      TF_IN_AUTOMATION: "true"
-      TF_INPUT: "false"
-      TF_VAR_tenancy_ocid: ${{ secrets.OCI_TENANCY_OCID }}
-      TF_VAR_compartment_ocid: ${{ vars.OCI_COMPARTMENT_OCID }}
-      TF_VAR_region: ${{ vars.OCI_REGION }}
-      TF_VAR_gateway_image: ghcr.io/nitutravels/nitu-whatsapp-gateway:latest
-      TF_VAR_gateway_api_key: ${{ secrets.GATEWAY_API_KEY }}
-      TF_VAR_gateway_admin_token: ${{ secrets.GATEWAY_ADMIN_TOKEN }}
-      TF_VAR_gateway_webhook_secret: ${{ secrets.GATEWAY_WEBHOOK_SECRET }}
-      TF_VAR_gateway_domain: ${{ vars.GATEWAY_DOMAIN }}
-      TF_VAR_webhook_url: ${{ vars.WEBHOOK_URL }}
-      TF_VAR_default_country_code: ${{ vars.DEFAULT_COUNTRY_CODE || '91' }}
-      TF_VAR_media_allowed_hosts: ${{ vars.MEDIA_ALLOWED_HOSTS || 'nitutravels.in,www.nitutravels.in' }}
-      TF_VAR_availability_domain_index: ${{ vars.AVAILABILITY_DOMAIN_INDEX || '0' }}
     steps:
-      - uses: hashicorp/setup-terraform@v4
-        with:
-          terraform_version: 1.15.8
-          terraform_wrapper: false
-      - name: Apply Oracle infrastructure
+      - name: Configure OCI credentials
         shell: bash
         env:
           KEY: ${{ secrets.OCI_PRIVATE_KEY }}
           FP: ${{ secrets.OCI_FINGERPRINT }}
-          BUCKET: ${{ vars.OCI_TF_STATE_BUCKET }}
-          NS: ${{ vars.OCI_NAMESPACE }}
         run: |
-          set +e
-          mkdir -p "$HOME/.oci" /tmp/src
+          mkdir -p "$HOME/.oci"
           printf '%s\n' "$KEY" > "$HOME/.oci/key.pem"
           chmod 600 "$HOME/.oci/key.pem"
           FP="$(printf '%s' "$FP" | tr -d '[:space:]')"
           printf '[DEFAULT]\nuser=%s\nfingerprint=%s\ntenancy=%s\nregion=%s\nkey_file=%s/.oci/key.pem\n' '${{ secrets.OCI_USER_OCID }}' "$FP" '${{ secrets.OCI_TENANCY_OCID }}' '${{ vars.OCI_REGION }}' "$HOME" > "$HOME/.oci/config"
           chmod 600 "$HOME/.oci/config"
-          curl -fsSL 'https://github.com/nitutravels/nitu-whatsapp-gateway/archive/5a772d257fb505f75a6f6f1eea55a1d12914d2ad.tar.gz' | tar -xz -C /tmp/src --strip-components=1
-          cd /tmp/src/infra/terraform
-          terraform init -reconfigure -no-color -backend-config="bucket=$BUCKET" -backend-config="namespace=$NS" -backend-config="region=${{ vars.OCI_REGION }}" -backend-config="key=nitu-whatsapp-gateway/terraform.tfstate" -backend-config="auth=APIKey" -backend-config="config_file_profile=DEFAULT" >/dev/null 2>&1
-          terraform apply -auto-approve -compact-warnings -no-color >/tmp/apply.log 2>&1
-          RC=$?
-          echo "apply_exit=$RC"
-          if [ "$RC" -ne 0 ]; then
-            grep -n -B4 -A24 '^Error:' /tmp/apply.log || tail -n 35 /tmp/apply.log
-          else
-            echo "public_ip=$(terraform output -raw public_ip)"
-            echo "dashboard_url=$(terraform output -raw dashboard_url)"
-            echo "health_url=$(terraform output -raw health_url)"
-          fi
+      - name: List subscribed regions and availability domains
+        shell: bash
+        run: |
+          set +e
+          pipx install --quiet oci-cli
+          echo 'subscribed_regions_begin'
+          oci iam region-subscription list --query 'data[].{region:"region-name",home:"is-home-region",status:status}' --output table
+          echo 'subscribed_regions_end'
+          for REGION in $(oci iam region-subscription list --query 'data[]."region-name"' --raw-output | tr -d '[]",'); do
+            echo "region=$REGION"
+            oci iam availability-domain list --compartment-id '${{ secrets.OCI_TENANCY_OCID }}' --region "$REGION" --query 'data[].name' --raw-output
+          done
           exit 1
