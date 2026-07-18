@@ -1,0 +1,28 @@
+LIVE_GATEWAY_STATUS_BEGIN
+CHECKED_AT=2026-07-18T16:28:15Z
+INSTANCE_RUNNING=yes
+ORACLE_PLUGINS_BEGIN
+{"message":null,"name":"Custom Logs Monitoring","status":"NOT_SUPPORTED"}
+{"message":null,"name":"Cloud Guard Workload Protection","status":"RUNNING"}
+{"message":null,"name":"Vulnerability Scanning","status":"STOPPED"}
+{"message":null,"name":"Compute HPC RDMA Authentication","status":"NOT_SUPPORTED"}
+{"message":null,"name":"OS Management Hub Agent","status":"STOPPED"}
+{"message":null,"name":"Management Agent","status":"STOPPED"}
+{"message":null,"name":"Compute RDMA GPU Monitoring","status":"NOT_SUPPORTED"}
+{"message":null,"name":"Compute HPC RDMA Auto-Configuration","status":"NOT_SUPPORTED"}
+{"message":null,"name":"Block Volume Management","status":"STOPPED"}
+{"message":null,"name":"Compute Instance Monitoring","status":"RUNNING"}
+{"message":null,"name":"Bastion","status":"STOPPED"}
+ORACLE_PLUGINS_END
+RECENT_COMMAND_EXECUTIONS_BEGIN
+{"state":"ACCEPTED","created":"2026-07-18T16:10:10.367000+00:00","updated":"2026-07-18T16:10:10.367000+00:00","exitCode":null,"message":null}
+RECENT_COMMAND_EXECUTIONS_END
+HEALTH_HTTP=200
+READY_HTTP=503
+STATUS_HTTP=200
+MESSAGES_HTTP=200
+STATUS={"status":"awaiting_pairing","ready":false,"account":null,"lastError":"ProtocolError: Protocol error (Runtime.callFunctionOn): Execution context was destroyed.\n    at <instance_members_initializer> (/app/node_modules/puppeteer-core/lib/cjs/puppeteer/common/CallbackRegistry.js:103:14)\n    at new Callback (/app/node_modules/puppeteer-core/lib/cjs/puppeteer/common/CallbackRegistry.js:107:16)\n    at CallbackRegistry.create (/app/node_modules/puppeteer-core/lib/cjs/puppeteer/common/CallbackRegistry.js:25:26)\n    at Connection._rawSend (/app/node_modules/puppeteer-core/lib/cjs/puppeteer/cdp/Connection.js:108:26)\n    at CdpCDPSession.send (/app/node_modules/puppeteer-core/lib/cjs/puppeteer/cdp/CdpSession.js:74:33)\n    at #evaluate (/app/node_modules/puppeteer-core/lib/cjs/puppeteer/cdp/ExecutionContext.js:363:50)\n    at ExecutionContext.evaluate (/app/node_modules/puppeteer-core/lib/cjs/puppeteer/cdp/ExecutionContext.js:277:36)\n    at IsolatedWorld.evaluate (/app/node_modules/puppeteer-core/lib/cjs/puppeteer/cdp/IsolatedWorld.js:100:30)\n    at CdpFrame.evaluate (/app/node_modules/puppeteer-core/lib/cjs/puppeteer/api/Frame.js:362:43)\n    at CdpFrame.<anonymous> (/app/node_modules/puppeteer-core/lib/cjs/puppeteer/util/decorators.js:109:27)\n    at CdpPage.evaluate (/app/node_modules/puppeteer-core/lib/cjs/puppeteer/api/Page.js:830:43)\n    at Client.inject (/app/node_modules/whatsapp-web.js/src/Client.js:146:55)\n    at async Client.initialize (/app/node_modules/whatsapp-web.js/src/Client.js:493:9)","queue":{"failed":1,"sent":3}}
+
+MESSAGE_SUMMARY=[{"status":"failed","count":1},{"status":"sent","count":3}]
+
+LIVE_GATEWAY_STATUS_END
