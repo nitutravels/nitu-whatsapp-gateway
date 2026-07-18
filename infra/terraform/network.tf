@@ -1,8 +1,8 @@
 resource "oci_core_vcn" "gateway" {
   compartment_id = var.compartment_ocid
-  cidr_blocks     = ["10.42.0.0/16"]
-  display_name    = "nitu-wa-gateway-vcn"
-  dns_label       = "nituwagw"
+  cidr_blocks    = ["10.42.0.0/16"]
+  display_name   = "nitu-wa-gateway-vcn"
+  dns_label      = "nituwagw"
 }
 
 resource "oci_core_internet_gateway" "gateway" {
