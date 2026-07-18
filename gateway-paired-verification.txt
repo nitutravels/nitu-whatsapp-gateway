@@ -1,0 +1,18 @@
+PAIRED_GATEWAY_VERIFICATION_BEGIN
+HEALTH_HTTP=200
+READY_HTTP=200
+ADMIN_STATUS_HTTP=200
+QUEUE_LIST_HTTP=200
+HEALTH_BODY={"ok":true,"service":"nitu-whatsapp-gateway","time":"2026-07-18T10:57:24.106Z"}
+
+READY_BODY={"ready":true,"status":"ready"}
+
+ADMIN_STATUS_BODY={"status":"ready","ready":true,"account":{"wid":"918901066699@c.us","pushname":"Nitu Travels","platform":"smba"},"pairingCode":null,"qrDataUrl":null,"lastError":null,"queue":{"sent":1}}
+
+QUEUE_SUMMARY={"type":"array","count":1,"sampleStatuses":["sent"]}
+
+READY_VALUE=true
+GATEWAY_READY=true
+GATEWAY_STATUS=ready
+PAIRED_GATEWAY_VERIFIED=yes
+PAIRED_GATEWAY_VERIFICATION_END
