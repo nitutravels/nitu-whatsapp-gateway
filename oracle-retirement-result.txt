@@ -1,0 +1,3 @@
+ORACLE_NAMS_RETIREMENT_BEGIN
+RETIREMENT_STATUS=blocked
+ERROR=Expected exactly one active instance at 161.118.187.93; found 0.
