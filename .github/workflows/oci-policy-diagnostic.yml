@@ -34,34 +34,44 @@ jobs:
           chmod 600 "$HOME/.oci/config"
       - name: Install OCI CLI
         run: pipx install --quiet oci-cli
-      - name: Test effective permissions
+      - name: Create repository-specific state bucket
         shell: bash
         env:
           COMPARTMENT: ${{ vars.OCI_COMPARTMENT_OCID }}
           NAMESPACE: ${{ vars.OCI_NAMESPACE }}
-          BUCKET: ${{ vars.OCI_TF_STATE_BUCKET }}
           OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING: 'True'
           SUPPRESS_LABEL_WARNING: 'True'
         run: |
           set +e
-          report() {
-            local label="$1" file="$2" rc="$3"
-            echo "${label}_exit=${rc}"
-            if [ "$rc" -ne 0 ]; then
-              grep -E '"code"|"message"|"status"|"operation_name"' "$file" | head -n 12 || true
-            fi
-          }
-
-          oci iam compartment get --compartment-id "$COMPARTMENT" >/dev/null 2>/tmp/comp.err
-          RC=$?
-          report compartment_get /tmp/comp.err "$RC"
+          BUCKET="nitu-wa-tfstate-${GITHUB_REPOSITORY_ID}-bom"
+          echo "candidate_bucket=$BUCKET"
 
           oci os bucket get --namespace-name "$NAMESPACE" --bucket-name "$BUCKET" >/dev/null 2>/tmp/get.err
-          RC=$?
-          report bucket_get /tmp/get.err "$RC"
+          GET_RC=$?
+          echo "candidate_get_exit=$GET_RC"
 
-          oci os bucket create --namespace-name "$NAMESPACE" --compartment-id "$COMPARTMENT" --name "$BUCKET" --public-access-type NoPublicAccess --storage-tier Standard --versioning Enabled >/dev/null 2>/tmp/create.err
-          RC=$?
-          report bucket_create /tmp/create.err "$RC"
+          if [ "$GET_RC" -ne 0 ]; then
+            oci os bucket create \
+              --namespace-name "$NAMESPACE" \
+              --compartment-id "$COMPARTMENT" \
+              --name "$BUCKET" \
+              --public-access-type NoPublicAccess \
+              --storage-tier Standard \
+              --versioning Enabled >/dev/null 2>/tmp/create.err
+            CREATE_RC=$?
+            echo "candidate_create_exit=$CREATE_RC"
+            if [ "$CREATE_RC" -ne 0 ]; then
+              grep -E '"code"|"message"|"status"|"operation_name"' /tmp/create.err | head -n 12 || true
+              exit 1
+            fi
+          fi
 
-          exit 1
+          oci os bucket get --namespace-name "$NAMESPACE" --bucket-name "$BUCKET" >/dev/null 2>/tmp/verify.err
+          VERIFY_RC=$?
+          echo "candidate_verify_exit=$VERIFY_RC"
+          if [ "$VERIFY_RC" -ne 0 ]; then
+            grep -E '"code"|"message"|"status"|"operation_name"' /tmp/verify.err | head -n 12 || true
+            exit 1
+          fi
+
+          echo 'repository_specific_bucket_ready=yes'
