@@ -1,6 +1,6 @@
 name: One-shot gateway recovery probe
 
-# Immediate read-only probe after Chromium lock repair.
+# Final read-only probe after Chromium lock recovery completed.
 on:
   push:
     branches: [main]
@@ -40,5 +40,5 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add docs/gateway-current-status.txt
-          git diff --cached --quiet || git commit -m 'Record current gateway recovery status'
+          git diff --cached --quiet || git commit -m 'Record final gateway recovery status'
           git push origin HEAD:main
