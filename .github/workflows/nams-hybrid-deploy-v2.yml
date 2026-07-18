@@ -1,0 +1,303 @@
+name: Deploy NAMS Hybrid Agent v2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/nams-hybrid-deploy-v2.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: nams-hybrid-deployment
+  cancel-in-progress: true
+
+env:
+  INSTANCE_DISPLAY_NAME: nams-hybrid-agent
+  NSG_DISPLAY_NAME: nams-hybrid-nsg
+  PACKAGE_OBJECT_NAME: nams-hybrid/NAMS_Hybrid_Lightpanda_Agent.zip
+  PACKAGE_PATH: deploy/nams/NAMS_Hybrid_Lightpanda_Agent.zip
+  PACKAGE_SHA256: 1ead7f73b803625f8533c060d8a476cc18adb6518e1d4e2dc79690dc7d85f56d
+  SHAPE: VM.Standard.A1.Flex
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Verify installer package
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -s "$PACKAGE_PATH"
+          echo "$PACKAGE_SHA256  $PACKAGE_PATH" | sha256sum -c -
+          cp "$PACKAGE_PATH" /tmp/NAMS_Hybrid_Lightpanda_Agent.zip
+
+      - name: Configure OCI API credentials
+        shell: bash
+        env:
+          OCI_PRIVATE_KEY_PEM: ${{ secrets.OCI_PRIVATE_KEY }}
+          OCI_FINGERPRINT_VALUE: ${{ secrets.OCI_FINGERPRINT }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$HOME/.oci"
+          python - <<'PYKEY'
+          import os
+          from pathlib import Path
+          value = os.environ.get('OCI_PRIVATE_KEY_PEM', '').strip()
+          if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+              value = value[1:-1]
+          if '\\n' in value and '\n' not in value:
+              value = value.replace('\\r', '').replace('\\n', '\n')
+          Path.home().joinpath('.oci/oci_api_key.pem').write_text(value.replace('\r', '').strip() + '\n', encoding='utf-8')
+          PYKEY
+          chmod 600 "$HOME/.oci/oci_api_key.pem"
+          FINGERPRINT="$(printf '%s' "$OCI_FINGERPRINT_VALUE" | tr -d '[:space:]')"
+          cat > "$HOME/.oci/config" <<EOF
+          [DEFAULT]
+          user=${{ secrets.OCI_USER_OCID }}
+          fingerprint=$FINGERPRINT
+          tenancy=${{ secrets.OCI_TENANCY_OCID }}
+          region=${{ vars.OCI_REGION }}
+          key_file=$HOME/.oci/oci_api_key.pem
+          EOF
+          chmod 600 "$HOME/.oci/config"
+
+      - name: Install OCI CLI
+        shell: bash
+        run: |
+          pipx install oci-cli
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Resolve Oracle resources and upload package
+        id: oci
+        shell: bash
+        env:
+          TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
+          CONFIGURED_COMPARTMENT_OCID: ${{ vars.OCI_COMPARTMENT_OCID }}
+          CONFIGURED_NAMESPACE: ${{ vars.OCI_NAMESPACE }}
+          CONFIGURED_BUCKET: ${{ vars.OCI_TF_STATE_BUCKET }}
+          REGION: ${{ vars.OCI_REGION }}
+        run: |
+          set -Eeuo pipefail
+          COMPARTMENT_OCID="$CONFIGURED_COMPARTMENT_OCID"
+          if [[ ! "$COMPARTMENT_OCID" =~ ^ocid1\.compartment\. ]]; then
+            COMPARTMENT_OCID="$(oci iam compartment list --compartment-id "$TENANCY_OCID" --compartment-id-in-subtree true --access-level ANY --all --output json | jq -r '[.data[] | select(.name == "NituWAGateway" and .["lifecycle-state"] == "ACTIVE") | .id][0] // empty')"
+          fi
+          if [[ ! "$COMPARTMENT_OCID" =~ ^ocid1\.compartment\. ]]; then
+            echo "::error::Could not resolve the Oracle compartment."
+            exit 1
+          fi
+
+          NAMESPACE="$CONFIGURED_NAMESPACE"
+          if [[ -z "$NAMESPACE" || "$NAMESPACE" == "null" ]]; then
+            NAMESPACE="$(oci os ns get --query data --raw-output)"
+          fi
+          BUCKET="$CONFIGURED_BUCKET"
+          if [[ -z "$BUCKET" ]]; then BUCKET="nams-hybrid-${{ github.repository_owner }}"; fi
+          if ! oci os bucket get --namespace-name "$NAMESPACE" --bucket-name "$BUCKET" >/dev/null 2>&1; then
+            oci os bucket create --namespace-name "$NAMESPACE" --compartment-id "$COMPARTMENT_OCID" --name "$BUCKET" --public-access-type NoPublicAccess --storage-tier Standard >/dev/null
+          fi
+          oci os object put --namespace-name "$NAMESPACE" --bucket-name "$BUCKET" --name "$PACKAGE_OBJECT_NAME" --file /tmp/NAMS_Hybrid_Lightpanda_Agent.zip --force >/dev/null
+          EXPIRES="$(date -u -d '+4 hours' '+%Y-%m-%dT%H:%M:%SZ')"
+          PAR_JSON="$(oci os preauth-request create --namespace-name "$NAMESPACE" --bucket-name "$BUCKET" --name "nams-hybrid-${{ github.run_id }}" --access-type ObjectRead --object-name "$PACKAGE_OBJECT_NAME" --time-expires "$EXPIRES" --output json)"
+          ACCESS_URI="$(jq -r '.data["access-uri"]' <<<"$PAR_JSON")"
+          PAR_URL="https://objectstorage.${REGION}.oraclecloud.com${ACCESS_URI}"
+
+          VCN_ID="$(oci network vcn list --compartment-id "$COMPARTMENT_OCID" --display-name nitu-wa-gateway-vcn --all --query 'data[0].id' --raw-output)"
+          SUBNET_ID="$(oci network subnet list --compartment-id "$COMPARTMENT_OCID" --vcn-id "$VCN_ID" --display-name nitu-wa-gateway-public-subnet --all --query 'data[0].id' --raw-output)"
+          if [[ ! "$VCN_ID" =~ ^ocid1\.vcn\. || ! "$SUBNET_ID" =~ ^ocid1\.subnet\. ]]; then
+            echo "::error::Could not resolve the existing public VCN/subnet."
+            exit 1
+          fi
+
+          NSG_ID="$(oci network nsg list --compartment-id "$COMPARTMENT_OCID" --vcn-id "$VCN_ID" --display-name "$NSG_DISPLAY_NAME" --all --query 'data[0].id' --raw-output 2>/dev/null || true)"
+          if [[ ! "$NSG_ID" =~ ^ocid1\.networksecuritygroup\. ]]; then
+            NSG_ID="$(oci network nsg create --compartment-id "$COMPARTMENT_OCID" --vcn-id "$VCN_ID" --display-name "$NSG_DISPLAY_NAME" --query 'data.id' --raw-output)"
+          fi
+          EXISTING_RULES="$(oci network nsg rules list --network-security-group-id "$NSG_ID" --all --output json)"
+          if ! jq -e '.data[] | select(.protocol=="6" and .["tcp-options"]["destination-port-range"].min==80)' <<<"$EXISTING_RULES" >/dev/null; then
+            oci network nsg rules add --network-security-group-id "$NSG_ID" --security-rules '[{"direction":"INGRESS","protocol":"6","source":"0.0.0.0/0","sourceType":"CIDR_BLOCK","tcpOptions":{"destinationPortRange":{"min":80,"max":80}},"description":"NAMS dashboard"}]' >/dev/null
+          fi
+          if ! jq -e '.data[] | select(.protocol=="6" and .["tcp-options"]["destination-port-range"].min==6080)' <<<"$EXISTING_RULES" >/dev/null; then
+            oci network nsg rules add --network-security-group-id "$NSG_ID" --security-rules '[{"direction":"INGRESS","protocol":"6","source":"0.0.0.0/0","sourceType":"CIDR_BLOCK","tcpOptions":{"destinationPortRange":{"min":6080,"max":6080}},"description":"NAMS supervised browser"}]' >/dev/null
+          fi
+
+          echo "compartment=$COMPARTMENT_OCID" >> "$GITHUB_OUTPUT"
+          echo "subnet=$SUBNET_ID" >> "$GITHUB_OUTPUT"
+          echo "nsg=$NSG_ID" >> "$GITHUB_OUTPUT"
+          echo "par_url=$PAR_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Create or update the free Ampere instance
+        id: deploy
+        shell: bash
+        env:
+          TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
+          COMPARTMENT_OCID: ${{ steps.oci.outputs.compartment }}
+          SUBNET_ID: ${{ steps.oci.outputs.subnet }}
+          NSG_ID: ${{ steps.oci.outputs.nsg }}
+          PAR_URL: ${{ steps.oci.outputs.par_url }}
+        run: |
+          set -Eeuo pipefail
+          ADMIN_PASSWORD="$(openssl rand -base64 24 | tr -d '/+=' | cut -c1-24)"
+          BROWSERLESS_TOKEN="$(openssl rand -hex 24)"
+          CONFIG_KEY="$(openssl rand -hex 32)"
+
+          cat > /tmp/install-nams.sh <<INSTALL_SCRIPT
+          #!/usr/bin/env bash
+          set -Eeuo pipefail
+          exec > >(tee -a /var/log/nams-hybrid-cloud-init.log) 2>&1
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y ca-certificates curl unzip jq
+          rm -rf /tmp/nams-hybrid
+          mkdir -p /tmp/nams-hybrid /opt/nams-hybrid
+          curl -fsSL '$PAR_URL' -o /tmp/nams-hybrid.zip
+          unzip -q -o /tmp/nams-hybrid.zip -d /tmp/nams-hybrid
+          PUBLIC_HOST="\$(curl -fsS -H 'Authorization: Bearer Oracle' http://169.254.169.254/opc/v2/vnics/ | jq -r '.[0].publicIp // empty')"
+          export NAMS_SOURCE_DIR=/tmp/nams-hybrid
+          export NAMS_INSTALL_DIR=/opt/nams-hybrid
+          export PUBLIC_HOST
+          export ADMIN_PASSWORD='$ADMIN_PASSWORD'
+          export BROWSERLESS_TOKEN='$BROWSERLESS_TOKEN'
+          export CONFIG_ENCRYPTION_KEY='$CONFIG_KEY'
+          export GEMINI_API_KEY=''
+          export EMAIL_APP_PASSWORD=''
+          bash /tmp/nams-hybrid/install.sh
+          INSTALL_SCRIPT
+          chmod +x /tmp/install-nams.sh
+
+          USER_DATA="$(base64 -w0 /tmp/install-nams.sh)"
+          METADATA="$(jq -nc --arg user_data "$USER_DATA" '{user_data:$user_data}')"
+          AGENT_CONFIG='{"areAllPluginsDisabled":false,"isManagementDisabled":false,"isMonitoringDisabled":false,"pluginsConfig":[{"name":"Compute Instance Run Command","desiredState":"ENABLED"}]}'
+          NSG_IDS="$(jq -nc --arg id "$NSG_ID" '[$id]')"
+
+          INSTANCE_ID="$(oci compute instance list --compartment-id "$COMPARTMENT_OCID" --display-name "$INSTANCE_DISPLAY_NAME" --all --output json | jq -r '[.data[] | select(.["lifecycle-state"] != "TERMINATED") | .id][0] // empty')"
+          if [[ -z "$INSTANCE_ID" ]]; then
+            IMAGE_ID="$(oci compute image list --compartment-id "$TENANCY_OCID" --operating-system 'Canonical Ubuntu' --operating-system-version '24.04' --shape "$SHAPE" --sort-by TIMECREATED --sort-order DESC --all --query 'data[0].id' --raw-output)"
+            mapfile -t ADS < <(oci iam availability-domain list --compartment-id "$TENANCY_OCID" --all --output json | jq -r '.data[].name')
+            for AD in "${ADS[@]}"; do
+              echo "Trying Always Free Ampere capacity in $AD"
+              set +e
+              LAUNCH_JSON="$(oci compute instance launch --availability-domain "$AD" --compartment-id "$COMPARTMENT_OCID" --shape "$SHAPE" --shape-config '{"ocpus":1,"memoryInGBs":6}' --display-name "$INSTANCE_DISPLAY_NAME" --image-id "$IMAGE_ID" --subnet-id "$SUBNET_ID" --assign-public-ip true --nsg-ids "$NSG_IDS" --agent-config "$AGENT_CONFIG" --metadata "$METADATA" --wait-for-state RUNNING --max-wait-seconds 1200 --output json 2>/tmp/nams-launch.err)"
+              STATUS=$?
+              set -e
+              if [[ $STATUS -eq 0 ]]; then
+                INSTANCE_ID="$(jq -r '.data.id' <<<"$LAUNCH_JSON")"
+                break
+              fi
+              tail -n 5 /tmp/nams-launch.err || true
+            done
+            if [[ -z "$INSTANCE_ID" ]]; then
+              echo "::error::Oracle had no free Ampere A1 capacity in the available domains. No paid shape was used."
+              exit 1
+            fi
+          else
+            STATE="$(oci compute instance get --instance-id "$INSTANCE_ID" --query 'data.["lifecycle-state"]' --raw-output)"
+            if [[ "$STATE" == "STOPPED" ]]; then
+              oci compute instance action --instance-id "$INSTANCE_ID" --action START --wait-for-state RUNNING --max-wait-seconds 900 >/dev/null
+            fi
+            CONTENT_JSON="$(jq -nc --arg text "$(cat /tmp/install-nams.sh)" '{source:{sourceType:"TEXT",text:$text},output:{outputType:"TEXT"}}')"
+            TARGET_JSON="$(jq -nc --arg instanceId "$INSTANCE_ID" '{instanceId:$instanceId}')"
+            COMMAND_ID="$(oci instance-agent command create --compartment-id "$COMPARTMENT_OCID" --content "$CONTENT_JSON" --target "$TARGET_JSON" --timeout-in-seconds 3600 --query 'data.id' --raw-output)"
+            for _ in $(seq 1 120); do
+              EXEC_JSON="$(oci instance-agent command-execution get --command-id "$COMMAND_ID" --instance-id "$INSTANCE_ID" --output json 2>/dev/null || true)"
+              STATUS="$(jq -r '.data.["lifecycle-state"] // empty' <<<"$EXEC_JSON")"
+              [[ "$STATUS" == "SUCCEEDED" ]] && break
+              if [[ "$STATUS" == "FAILED" || "$STATUS" == "TIMED_OUT" || "$STATUS" == "CANCELED" ]]; then
+                echo "$EXEC_JSON"
+                exit 1
+              fi
+              sleep 15
+            done
+          fi
+
+          VNIC_ID="$(oci compute vnic-attachment list --compartment-id "$COMPARTMENT_OCID" --instance-id "$INSTANCE_ID" --all --query 'data[0].["vnic-id"]' --raw-output)"
+          PUBLIC_IP=""
+          for _ in $(seq 1 60); do
+            PUBLIC_IP="$(oci network vnic get --vnic-id "$VNIC_ID" --query 'data.["public-ip"]' --raw-output 2>/dev/null || true)"
+            [[ "$PUBLIC_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && break
+            sleep 10
+          done
+          if [[ -z "$PUBLIC_IP" || "$PUBLIC_IP" == "null" ]]; then
+            echo "::error::The NAMS instance has no public IP."
+            exit 1
+          fi
+
+          HEALTH_OK=false
+          for _ in $(seq 1 120); do
+            if curl -fsS --connect-timeout 5 --max-time 10 "http://$PUBLIC_IP/health" >/dev/null 2>&1; then HEALTH_OK=true; break; fi
+            sleep 15
+          done
+          if [[ "$HEALTH_OK" != true ]]; then
+            echo "::error::The instance is running but NAMS did not become healthy within 30 minutes."
+            exit 1
+          fi
+
+          cat > /tmp/nams-credentials.json <<EOF
+          {"dashboard":"http://$PUBLIC_IP/","username":"admin","password":"$ADMIN_PASSWORD","browserViewer":"http://$PUBLIC_IP:6080/?token=$BROWSERLESS_TOKEN","browserlessToken":"$BROWSERLESS_TOKEN","instanceId":"$INSTANCE_ID"}
+          EOF
+          cat > /tmp/nams-public.pem <<'PUBLIC_KEY'
+          -----BEGIN PUBLIC KEY-----
+          MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAtrKAsPbhQ5WXR7TpPo7F
+          904brAWAStMZq+eLDbzWXEPlkqEdFo1u4Jx0SqZThcX+/eeQ2ECeJGMDB13xIQ0K
+          PcJU61qi9rL6Jj025+l+AvlNjFYOM8ipgCkBrstpvQxtbRSudjmb58wgZ7Ybqu7m
+          wUNUokwlt7w5fdT6BxorxsbUTGX6GQQPzyCKClyk+VTZsWMiGogWUyVkQSVMxlj8
+          WBgcj+Sc3/Av+ywxH6Uptpg9KlyD71JP225RDu5oT2VRQnN/MjQiBkyEPC0wpvOi
+          5vxUEbGD61NEnoO+7XRWTWWgpJitmGiCDIE/eQuLzkY96G/p6aQK7vEQr+TW2UEv
+          Edv/2yLeN8tgqGplRSgyQrzSaFk6oQF9tjLF8F0OrXDJt0jxXpBuEDgezV08/8JF
+          Ce7wEdZewczFcjEJdxcOfc8rNkENPeTfXAzi8tI6tyCuM7V0n2az3/V86k5nHIBV
+          jE1rGuQr18eCnZvvmshfLQjVr44GS8mB91oS/FkoSzgM4Np5YOLXKpB2RRt7b31K
+          WOEi4vGq3MJp/Czb74ey0vsak2xO/9mT0t208cEvyn7gNplWPj+bWe9lhunszztt
+          ql72sCKcO+K1Gr81v0BLJa2yAnlQO5xl2w67dWe8czVXFqnaD1CniWN/z75jUrQU
+          ffS407u+uo9yVifI/LH18nkCAwEAAQ==
+          -----END PUBLIC KEY-----
+          PUBLIC_KEY
+          openssl pkeyutl -encrypt -pubin -inkey /tmp/nams-public.pem -in /tmp/nams-credentials.json -out /tmp/nams-credentials.enc -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256
+          CIPHERTEXT="$(base64 -w0 /tmp/nams-credentials.enc)"
+          echo "NAMS_CREDENTIALS_CIPHERTEXT=$CIPHERTEXT"
+          echo "public_ip=$PUBLIC_IP" >> "$GITHUB_OUTPUT"
+          echo "dashboard=http://$PUBLIC_IP/" >> "$GITHUB_OUTPUT"
+          echo "ciphertext=$CIPHERTEXT" >> "$GITHUB_OUTPUT"
+
+      - name: Publish deployment summary
+        if: success()
+        shell: bash
+        run: |
+          echo '## NAMS Hybrid deployment' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Status: healthy' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Dashboard: ${{ steps.deploy.outputs.dashboard }}' >> "$GITHUB_STEP_SUMMARY"
+          echo '- AI: local Ollama / Gemma 3 1B; Gemini is optional' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Gmail: enter a Gmail app password once in the protected dashboard' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Report deployment status
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          TITLE='NAMS Hybrid Deployment Status'
+          STATUS='${{ job.status }}'
+          DASHBOARD='${{ steps.deploy.outputs.dashboard }}'
+          BODY=$(cat <<EOF
+          Status: $STATUS
+          Workflow run: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
+          Run ID: $GITHUB_RUN_ID
+          Dashboard: ${DASHBOARD:-not available}
+          Credentials are encrypted in the workflow log and are not written to this public issue.
+          EOF
+          )
+          ISSUE="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search 'NAMS Hybrid Deployment Status in:title' --json number --jq '.[0].number // empty')"
+          if [[ -n "$ISSUE" ]]; then
+            gh issue edit "$ISSUE" --repo "$GITHUB_REPOSITORY" --body "$BODY"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY"
+          fi
+          [[ "$STATUS" == 'success' ]]
