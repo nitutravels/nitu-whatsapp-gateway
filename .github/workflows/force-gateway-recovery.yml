@@ -1,5 +1,6 @@
 name: Priority WhatsApp gateway recovery
 
+# Priority execution trigger after watchdog image publication.
 on:
   push:
     branches: [main]
