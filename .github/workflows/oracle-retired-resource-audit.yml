@@ -47,7 +47,7 @@ jobs:
           EOF
           chmod 600 "$HOME/.oci/config"
 
-      - name: Inventory all Oracle compute resources
+      - name: Match retired NAMS instance
         shell: bash
         env:
           TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
@@ -57,21 +57,9 @@ jobs:
           set -uo pipefail
           exec > >(tee oracle-audit-result.txt) 2>&1
           pipx install --quiet oci-cli
-          echo 'ORACLE_TENANCY_AUDIT_BEGIN'
+          echo 'ORACLE_INSTANCE_AUDIT_BEGIN'
           echo "REGION=${{ vars.OCI_REGION }}"
           echo "TARGET_PUBLIC_IP=$TARGET_PUBLIC_IP"
-
-          echo 'RESOURCE_SEARCH_BEGIN'
-          if oci search resource structured-search \
-            --query-text 'query instance resources' \
-            --limit 1000 \
-            --output json > /tmp/search.json 2>/tmp/search.err; then
-            jq -r '.data.items[]? | "SEARCH_INSTANCE name=\(. ["display-name"] // .displayName // "") state=\(. ["lifecycle-state"] // .lifecycleState // "") compartment_id=\(. ["compartment-id"] // .compartmentId // "") identifier=\(.identifier // .id // "")"' /tmp/search.json
-            echo "RESOURCE_SEARCH_COUNT=$(jq '.data.items | length' /tmp/search.json)"
-          else
-            echo "RESOURCE_SEARCH_ERROR=$(tr '\n' ' ' </tmp/search.err | tail -c 1000)"
-          fi
-          echo 'RESOURCE_SEARCH_END'
 
           compartments_file="$(mktemp)"
           printf '%s\t%s\n' "$TENANCY_OCID" 'ROOT_TENANCY' > "$compartments_file"
@@ -84,19 +72,18 @@ jobs:
             --output json > /tmp/compartments.json 2>/tmp/compartments.err; then
             jq -r '.[] | @tsv' /tmp/compartments.json >> "$compartments_file"
           else
-            echo "COMPARTMENT_LIST_ERROR=$(tr '\n' ' ' </tmp/compartments.err | tail -c 1000)"
+            echo "COMPARTMENT_LIST_ERROR=$(tr '\n' ' ' </tmp/compartments.err | tail -c 700)"
           fi
 
           found=0
           visible=0
           denied=0
-          echo 'DIRECT_INSTANCE_LIST_BEGIN'
           while IFS=$'\t' read -r compartment_id compartment_name; do
             [ -n "$compartment_id" ] || continue
-            safe_name="$(printf '%s' "$compartment_name" | tr -c 'A-Za-z0-9._-' '_')"
-            if ! oci compute instance list --compartment-id "$compartment_id" --all --output json > "/tmp/instances-$safe_name.json" 2> "/tmp/instances-$safe_name.err"; then
+            file_key="$(printf '%s' "$compartment_name" | tr -c 'A-Za-z0-9._-' '_')"
+            if ! oci compute instance list --compartment-id "$compartment_id" --all --output json > "/tmp/instances-$file_key.json" 2> "/tmp/instances-$file_key.err"; then
               denied=$((denied + 1))
-              echo "INSTANCE_LIST_DENIED compartment=$compartment_name error=$(tr '\n' ' ' <"/tmp/instances-$safe_name.err" | tail -c 700)"
+              echo "INSTANCE_LIST_DENIED compartment=$compartment_name error=$(tr '\n' ' ' <"/tmp/instances-$file_key.err" | tail -c 700)"
               continue
             fi
 
@@ -111,15 +98,14 @@ jobs:
               created="$(jq -r '."time-created"' <<<"$instance")"
               ocpus="$(jq -r '."shape-config".ocpus // ""' <<<"$instance")"
               memory="$(jq -r '."shape-config"."memory-in-gbs" // ""' <<<"$instance")"
-
               public_ip=''
-              if vnic_json="$(oci compute vnic-attachment list --compartment-id "$compartment_id" --instance-id "$instance_id" --all --output json 2>/tmp/vnic-attachment.err)"; then
-                while IFS= read -r vnic_id; do
-                  [ -n "$vnic_id" ] || continue
-                  candidate="$(oci network vnic get --vnic-id "$vnic_id" --query 'data."public-ip"' --raw-output 2>/dev/null || true)"
-                  if [ -n "$candidate" ] && [ "$candidate" != 'null' ]; then public_ip="$candidate"; break; fi
-                done < <(jq -r '.data[]? | ."vnic-id"' <<<"$vnic_json")
-              fi
+
+              vnic_json="$(oci compute vnic-attachment list --compartment-id "$compartment_id" --instance-id "$instance_id" --all --output json 2>/dev/null || printf '{"data":[]}')"
+              while IFS= read -r vnic_id; do
+                [ -n "$vnic_id" ] || continue
+                candidate="$(oci network vnic get --vnic-id "$vnic_id" --query 'data."public-ip"' --raw-output 2>/dev/null || true)"
+                if [ -n "$candidate" ] && [ "$candidate" != 'null' ]; then public_ip="$candidate"; break; fi
+              done < <(jq -r '.data[]? | ."vnic-id"' <<<"$vnic_json")
 
               printf 'INSTANCE compartment=%q name=%q state=%q shape=%q ocpus=%q memory_gb=%q public_ip=%q ad=%q created=%q\n' \
                 "$compartment_name" "$display_name" "$state" "$shape" "$ocpus" "$memory" "$public_ip" "$ad" "$created"
@@ -135,14 +121,16 @@ jobs:
                 echo "TARGET_MEMORY_GB=$memory"
                 echo "TARGET_PUBLIC_IP=$public_ip"
                 echo "TARGET_CREATED=$created"
+                boot_json="$(oci compute boot-volume-attachment list --availability-domain "$ad" --compartment-id "$compartment_id" --instance-id "$instance_id" --all --output json 2>/dev/null || printf '{"data":[]}')"
+                echo "TARGET_BOOT_VOLUME_COUNT=$(jq '[.data[]? | select(."lifecycle-state" != "TERMINATED")] | length' <<<"$boot_json")"
               fi
-            done < <(jq -c '.data[]? | select(."lifecycle-state" != "TERMINATED")' "/tmp/instances-$safe_name.json")
+            done < <(jq -c '.data[]? | select(."lifecycle-state" != "TERMINATED")' "/tmp/instances-$file_key.json")
           done < "$compartments_file"
-          echo 'DIRECT_INSTANCE_LIST_END'
+
           echo "VISIBLE_ACTIVE_INSTANCE_COUNT=$visible"
           echo "DENIED_COMPARTMENT_COUNT=$denied"
           echo "TARGET_FOUND=$found"
-          echo 'ORACLE_TENANCY_AUDIT_END'
+          echo 'ORACLE_INSTANCE_AUDIT_END'
 
       - name: Save audit result
         if: always()
@@ -153,5 +141,5 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add oracle-audit-result.txt
-          git diff --cached --quiet || git commit -m 'Record corrected Oracle resource audit'
+          git diff --cached --quiet || git commit -m 'Record post-policy Oracle retirement audit'
           git push origin HEAD:oracle-resource-audit
