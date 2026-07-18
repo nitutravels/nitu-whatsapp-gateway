@@ -1,6 +1,6 @@
 name: One-shot gateway recovery probe
 
-# Final read-only probe after Chromium lock recovery completed.
+# Final read-only probe after Chromium lock recovery completed; rerun 2026-07-18T12:30Z.
 on:
   push:
     branches: [main]
