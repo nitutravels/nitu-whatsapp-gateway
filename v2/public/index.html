@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>Nitu WhatsApp Gateway</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <div><p class="eyebrow">NITU TRAVELS</p><h1>WhatsApp Gateway</h1><p class="subtitle">Baileys WebSocket transport · no Chromium</p></div>
+      <button id="forgetToken" class="secondary">Forget token</button>
+    </header>
+
+    <section id="loginCard" class="card narrow">
+      <h2>Administrator access</h2>
+      <p>Enter the gateway administrator token.</p>
+      <form id="loginForm" class="inline"><input id="token" type="password" minlength="32" placeholder="Administrator token" required><button>Open dashboard</button></form>
+    </section>
+
+    <div id="dashboard" hidden>
+      <section class="grid stats">
+        <article class="card"><span>Transport</span><strong id="status">—</strong><small id="phase">—</small></article>
+        <article class="card"><span>Account</span><strong id="account">Not linked</strong><small id="engine">—</small></article>
+        <article class="card"><span>Queue</span><strong id="queued">0</strong><small id="worker">—</small></article>
+        <article class="card"><span>Failed</span><strong id="failed">0</strong><small id="heartbeat">—</small></article>
+      </section>
+
+      <section id="connectCard" class="card">
+        <div class="sectionHead">
+          <div><h2>Connect WhatsApp</h2><p id="connectionHelp">Readiness is based only on an open authenticated WebSocket.</p></div>
+          <div class="actions"><button id="reconnect" class="secondary">Reconnect socket</button><button id="reset" class="danger">Reset session</button></div>
+        </div>
+        <p id="diagnostic" class="diagnostic" hidden></p>
+        <div id="qrWrap" hidden>
+          <p>On the primary phone: WhatsApp → Linked devices → Link a device, then scan this QR.</p>
+          <img id="qr" alt="WhatsApp QR code">
+        </div>
+        <details id="pairingFallback">
+          <summary>Use phone-number pairing</summary>
+          <form id="pairForm" class="inline"><input id="phone" inputmode="numeric" value="918901066699" placeholder="91XXXXXXXXXX" required><button>Generate code</button></form>
+          <div id="pairingOutput" class="pairing" hidden><span>Pairing code</span><strong id="pairingCode"></strong><p>WhatsApp → Linked devices → Link a device → Link with phone number.</p></div>
+        </details>
+      </section>
+
+      <section class="card">
+        <h2>Send test message</h2>
+        <p>The API accepts the request into SQLite first. Delivery starts only after the WebSocket is open.</p>
+        <form id="testForm" class="twoCol"><input id="testTo" inputmode="numeric" placeholder="Recipient with country code" required><textarea id="testText" placeholder="Test message" required></textarea><button>Queue test</button></form>
+      </section>
+
+      <section class="card">
+        <div class="sectionHead"><div><h2>Recent messages</h2><p>Retries retain the same provider message ID to reduce duplicate delivery.</p></div><button id="refresh" class="secondary">Refresh</button></div>
+        <div class="tableWrap"><table><thead><tr><th>Created</th><th>Recipient</th><th>Status</th><th>Attempts</th><th>Uncertain</th><th>Error</th><th>Action</th></tr></thead><tbody id="messages"></tbody></table></div>
+      </section>
+    </div>
+    <div id="toast" role="status"></div>
+  </main>
+  <script src="/app.js" defer></script>
+</body>
+</html>
