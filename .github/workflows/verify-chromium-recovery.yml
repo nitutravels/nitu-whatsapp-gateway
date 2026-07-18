@@ -1,0 +1,61 @@
+name: Verify Chromium profile recovery
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/verify-chromium-recovery.yml']
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Wait for repaired image and verify queued delivery
+        shell: bash
+        env:
+          DOMAIN: wa.nitutravels.in
+          ADMIN_TOKEN: ${{ secrets.GATEWAY_ADMIN_TOKEN }}
+        run: |
+          set +e
+          set -uo pipefail
+          exec > >(tee docs/gateway-chromium-recovery.txt) 2>&1
+          echo 'CHROMIUM_RECOVERY_VERIFICATION_BEGIN'
+          verified=0
+          for attempt in $(seq 1 50); do
+            ready_code="$(curl -sS --connect-timeout 10 --max-time 30 -o /tmp/ready.json -w '%{http_code}' "https://$DOMAIN/readyz" 2>/tmp/ready.err || echo 000)"
+            status_code="$(curl -sS --connect-timeout 10 --max-time 30 -H "Authorization: Bearer $ADMIN_TOKEN" -o /tmp/status.json -w '%{http_code}' "https://$DOMAIN/admin/api/status" 2>/tmp/status.err || echo 000)"
+            queue_code="$(curl -sS --connect-timeout 10 --max-time 30 -H "Authorization: Bearer $ADMIN_TOKEN" -o /tmp/messages.json -w '%{http_code}' "https://$DOMAIN/admin/api/messages?limit=20" 2>/tmp/queue.err || echo 000)"
+            gateway_status="$(jq -r '.status // "unknown"' /tmp/status.json 2>/dev/null || echo unknown)"
+            gateway_ready="$(jq -r '.ready // false' /tmp/status.json 2>/dev/null || echo false)"
+            queued="$(jq '[.[] | select(.status=="queued" or .status=="retry" or .status=="sending")] | length' /tmp/messages.json 2>/dev/null || echo -1)"
+            sent="$(jq '[.[] | select(.status=="sent" or .status=="delivered" or .status=="read")] | length' /tmp/messages.json 2>/dev/null || echo -1)"
+            lock_error="$(jq -r '.lastError // ""' /tmp/status.json 2>/dev/null | grep -c 'profile appears to be in use' || true)"
+            echo "ATTEMPT=$attempt READY_HTTP=$ready_code STATUS_HTTP=$status_code QUEUE_HTTP=$queue_code GATEWAY_STATUS=$gateway_status GATEWAY_READY=$gateway_ready PENDING=$queued SENT_OR_ACKED=$sent PROFILE_LOCK_ERROR=$lock_error"
+            if [ "$ready_code" = '200' ] && [ "$status_code" = '200' ] && [ "$queue_code" = '200' ] && [ "$gateway_ready" = 'true' ] && [ "$queued" = '0' ] && [ "$lock_error" = '0' ]; then
+              verified=1
+              break
+            fi
+            sleep 30
+          done
+          echo -n 'FINAL_STATUS='; jq -c '{status,ready,account,lastError,queue}' /tmp/status.json 2>/dev/null || cat /tmp/status.json; echo
+          echo -n 'FINAL_QUEUE='; jq -c '[.[] | {id,status,attempts,error,source:(.metadata.source // null),createdAt,updatedAt}]' /tmp/messages.json 2>/dev/null || cat /tmp/messages.json; echo
+          echo "CHROMIUM_RECOVERY_VERIFIED=$([ "$verified" -eq 1 ] && echo yes || echo no)"
+          echo 'CHROMIUM_RECOVERY_VERIFICATION_END'
+          [ "$verified" -eq 1 ]
+
+      - name: Persist recovery verification
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -f docs/gateway-chromium-recovery.txt || echo 'Verification did not produce a result.' > docs/gateway-chromium-recovery.txt
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/gateway-chromium-recovery.txt
+          git diff --cached --quiet || git commit -m 'Record Chromium profile recovery verification'
+          git push origin HEAD:main
