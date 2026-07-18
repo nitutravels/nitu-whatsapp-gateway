@@ -1,18 +1,21 @@
 PAIRED_GATEWAY_VERIFICATION_BEGIN
 HEALTH_HTTP=200
-READY_HTTP=200
+READY_HTTP=503
 ADMIN_STATUS_HTTP=200
 QUEUE_LIST_HTTP=200
-HEALTH_BODY={"ok":true,"service":"nitu-whatsapp-gateway","time":"2026-07-18T10:59:48.217Z"}
+HEALTH_BODY={"ok":true,"service":"nitu-whatsapp-gateway","time":"2026-07-18T11:45:35.934Z"}
 
-READY_BODY={"ready":true,"status":"ready"}
+READY_BODY={"ready":false,"status":"error"}
 
-ADMIN_STATUS_BODY={"status":"ready","ready":true,"account":{"wid":"918901066699@c.us","pushname":"Nitu Travels","platform":"smba"},"pairingCode":null,"qrDataUrl":null,"lastError":null,"queue":{"sent":1}}
+ADMIN_STATUS_BODY={"status":"error","ready":false,"account":null,"pairingCode":null,"qrDataUrl":null,"lastError":"Error: Failed to launch the browser process:  Code: 21\n\nstderr:\n[4741:4741:0718/114533.288321:ERROR:chrome/browser/process_singleton_posix.cc:365] The profile appears to be in use by another Chromium process (586) on another computer (fb002f4a1a5a). Chromium has locked the profile so that it doesn't get corrupted. If you are sure no other processes are using this profile, you can unlock the profile and relaunch Chromium.\n[4741:4741:0718/114533.288438:ERROR:chrome/browser/ui/views/message_box_dialog.cc:200] Unable to show message box: Chromium - The profile appears to be in use by another Chromium process (586) on another computer (fb002f4a1a5a). Chromium has locked the profile so that it doesn't get corrupted. If you are sure no other processes are using this profile, you can unlock the profile and relaunch Chromium.\n\nTROUBLESHOOTING: https://pptr.dev/troubleshooting\n\n    at ChildProcess.onClose (/app/node_modules/@puppeteer/browsers/lib/cjs/launch.js:350:24)\n    at ChildProcess.emit (node:events:531:35)\n    at ChildProcess._handle.onexit (node:internal/child_process:293:12)","queue":{"queued":1,"sent":1}}
 
-QUEUE_SUMMARY={"type":"array","count":1,"sampleStatuses":["sent"]}
+QUEUE_SUMMARY={"type":"array","count":2,"statuses":[{"status":"queued","count":1},{"status":"sent","count":1}]}
 
-READY_VALUE=true
-GATEWAY_READY=true
-GATEWAY_STATUS=ready
-PAIRED_GATEWAY_VERIFIED=yes
-PAIRED_GATEWAY_VERIFICATION_END
+RECENT_QUEUE_RECORDS_BEGIN
+{"id":"df2b057c-435b-4efc-8dcd-712c2a08421a","status":"queued","attempts":0,"error":null,"createdAt":"2026-07-18T11:09:55.133Z","updatedAt":"2026-07-18T11:09:55.133Z","scheduledAt":"2026-07-18T11:09:55.133Z","nextAttemptAt":"2026-07-18T11:09:55.133Z","to":"\\1****\\2","source":"admin-test"}
+{"id":"73bb1fee-881f-4fdd-9369-65ccfa7b0d29","status":"sent","attempts":1,"error":null,"createdAt":"2026-07-18T10:56:12.004Z","updatedAt":"2026-07-18T10:56:47.689Z","scheduledAt":"2026-07-18T10:56:12.004Z","nextAttemptAt":"2026-07-18T10:56:12.004Z","to":"\\1****\\2","source":"admin-test"}
+RECENT_QUEUE_RECORDS_END
+READY_VALUE=false
+GATEWAY_READY=false
+GATEWAY_STATUS=error
+PAIRED_GATEWAY_VERIFIED=no
