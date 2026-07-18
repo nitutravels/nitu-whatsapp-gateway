@@ -1,16 +1,6 @@
 GATEWAY_COMMAND_CANCEL_BEGIN
 MATCHING_ACTIVE_COMMANDS=1
-ServiceError:
-{
-    "client_version": "Oracle-PythonSDK/2.182.0, Oracle-PythonCLI/3.89.2",
-    "code": "NotAuthorizedOrNotFound",
-    "logging_tips": "Please run the OCI CLI command using --debug flag to find more debug information.",
-    "message": "RunCommand %s not found",
-    "opc-request-id": "860469E41004477786C399BCD4197D06/E3B23D6A77B13514DBAA5B6A424F4D8E/5A408D08957EA992D8481F2E2308CBB7",
-    "operation_name": "cancel_instance_agent_command",
-    "request_endpoint": "DELETE https://iaas.ap-mumbai-1.oraclecloud.com/20180530/instanceAgentCommands/null",
-    "status": 404,
-    "target_service": "compute_instance_agent",
-    "timestamp": "2026-07-18T16:33:31.650171+00:00",
-    "troubleshooting_tips": "See [https://docs.oracle.com/iaas/Content/API/References/apierrors.htm] for more information about resolving this error. If you are unable to resolve this issue, run this CLI command with --debug option and contact Oracle support and provide them the full error message."
-}
+CANCEL_REQUESTED_COUNT=1
+REMAINING_NOT_CANCELED=0
+{"commandId":"ocid1.instanceagentcommand.oc1.ap-mumbai-1.amaaaaaa724yghqaeaeelkdlcotcyvzhmiul6pqznzkpz7dgx4kvjwqtu5yq","displayName":"Nitu WhatsApp priority recovery","isCanceled":true,"timeCreated":"2026-07-18T16:10:10.367000+00:00"}
+GATEWAY_COMMAND_CANCEL_END
