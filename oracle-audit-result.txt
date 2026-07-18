@@ -1,0 +1,4 @@
+ORACLE_INSTANCE_AUDIT_BEGIN
+TARGET_FOUND=0
+ORACLE_INSTANCE_AUDIT_END
+Retired NAMS instance was not uniquely matched by public IP 161.118.187.93.
