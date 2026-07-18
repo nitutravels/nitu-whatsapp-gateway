@@ -1,0 +1,21 @@
+GATEWAY_VERIFICATION_BEGIN
+EXPECTED_IP=137.23.58.166
+DNS_ATTEMPT=1 DNS_A=137.23.58.166
+DNS_VERIFIED=yes
+SERVICE_ATTEMPT=1 HEALTH=000000 READY=000000 ADMIN=000000
+SERVICE_ATTEMPT=2 HEALTH=000000 READY=000000 ADMIN=000000
+SERVICE_ATTEMPT=3 HEALTH=200 READY=503 ADMIN=200
+HEALTH_HTTP=200
+READY_HTTP=503
+ADMIN_HTTP=200
+SERVICE_VERIFIED=yes
+HEALTH_BODY={"ok":true,"service":"nitu-whatsapp-gateway","time":"2026-07-18T10:40:25.405Z"}
+READY_BODY={"ready":false,"status":"starting"}
+ADMIN_BODY_PREFIX=<!doctype html> <html lang="en"> <head>   <meta charset="utf-8">   <meta name="viewport" content="width=device-width,initial-scale=1">   <meta name="robots" content="noindex,nofollow">   <title>Nitu WhatsApp Gateway</title>   <link rel="stylesheet" href="/styles.css"> </head> <body>   <main class="s
+HEALTH_ERROR=
+PUBLIC_HTTPS_HEALTH=200
+subject=CN = wa.nitutravels.in
+issuer=C = US, O = Let's Encrypt, CN = YE2
+notBefore=Jul 18 09:41:37 2026 GMT
+notAfter=Oct 16 09:41:36 2026 GMT
+GATEWAY_VERIFICATION_END
