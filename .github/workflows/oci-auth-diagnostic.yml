@@ -1,0 +1,70 @@
+name: OCI auth and bucket diagnostic
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/oci-auth-diagnostic.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Configure OCI credentials
+        shell: bash
+        env:
+          OCI_PRIVATE_KEY_PEM: ${{ secrets.OCI_PRIVATE_KEY }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$HOME/.oci"
+          printf '%s\n' "$OCI_PRIVATE_KEY_PEM" > "$HOME/.oci/oci_api_key.pem"
+          chmod 600 "$HOME/.oci/oci_api_key.pem"
+          cat > "$HOME/.oci/config" <<EOF
+          [DEFAULT]
+          user=${{ secrets.OCI_USER_OCID }}
+          fingerprint=${{ secrets.OCI_FINGERPRINT }}
+          tenancy=${{ secrets.OCI_TENANCY_OCID }}
+          region=${{ vars.OCI_REGION }}
+          key_file=$HOME/.oci/oci_api_key.pem
+          EOF
+          chmod 600 "$HOME/.oci/config"
+      - name: Install OCI CLI
+        run: pipx install --quiet oci-cli
+      - name: Test authentication and bucket access
+        shell: bash
+        env:
+          NS: ${{ vars.OCI_NAMESPACE }}
+          BUCKET: ${{ vars.OCI_TF_STATE_BUCKET }}
+          COMPARTMENT: ${{ vars.OCI_COMPARTMENT_OCID }}
+          OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING: 'True'
+          SUPPRESS_LABEL_WARNING: 'True'
+        run: |
+          set +e
+          redact() { sed -E 's/ocid1\.[A-Za-z0-9._-]+/[REDACTED_OCID]/g'; }
+
+          oci iam region-subscription list >/dev/null 2>/tmp/auth.err
+          AUTH_RC=$?
+          echo "auth_exit=$AUTH_RC"
+          if [ "$AUTH_RC" -ne 0 ]; then
+            tail -n 8 /tmp/auth.err | redact
+          fi
+
+          oci os bucket get --namespace-name "$NS" --bucket-name "$BUCKET" >/dev/null 2>/tmp/get.err
+          GET_RC=$?
+          echo "bucket_get_exit=$GET_RC"
+          if [ "$GET_RC" -ne 0 ]; then
+            tail -n 8 /tmp/get.err | redact
+          fi
+
+          oci os bucket create --namespace-name "$NS" --compartment-id "$COMPARTMENT" --name "$BUCKET" --public-access-type NoPublicAccess --storage-tier Standard --versioning Enabled >/dev/null 2>/tmp/create.err
+          CREATE_RC=$?
+          echo "bucket_create_exit=$CREATE_RC"
+          if [ "$CREATE_RC" -ne 0 ]; then
+            tail -n 12 /tmp/create.err | redact
+          fi
+
+          exit 1
