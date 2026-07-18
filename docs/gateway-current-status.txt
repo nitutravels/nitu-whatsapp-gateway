@@ -1,0 +1,7 @@
+READY_HTTP=503
+STATUS_HTTP=200
+QUEUE_HTTP=200
+STATUS={"status":"loading","ready":false,"account":{"wid":"918901066699@c.us","pushname":"Nitu Travels","platform":"smba"},"lastError":null,"queue":{"queued":1,"sent":2}}
+
+QUEUE=[{"id":"2314e6e4-f64e-420b-91ef-8610120a327f","status":"queued","attempts":0,"error":null,"source":"admin-test","createdAt":"2026-07-18T12:10:49.596Z","updatedAt":"2026-07-18T12:10:49.596Z"},{"id":"df2b057c-435b-4efc-8dcd-712c2a08421a","status":"sent","attempts":1,"error":null,"source":"admin-test","createdAt":"2026-07-18T11:09:55.133Z","updatedAt":"2026-07-18T12:11:04.692Z"},{"id":"73bb1fee-881f-4fdd-9369-65ccfa7b0d29","status":"sent","attempts":1,"error":null,"source":"admin-test","createdAt":"2026-07-18T10:56:12.004Z","updatedAt":"2026-07-18T10:56:47.689Z"}]
+
