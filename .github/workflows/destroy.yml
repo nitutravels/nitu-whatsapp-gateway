@@ -42,18 +42,31 @@ jobs:
         shell: bash
         env:
           OCI_PRIVATE_KEY_PEM: ${{ secrets.OCI_PRIVATE_KEY }}
+          OCI_FINGERPRINT_VALUE: ${{ secrets.OCI_FINGERPRINT }}
         run: |
+          set -Eeuo pipefail
           mkdir -p "$HOME/.oci"
-          printf '%s' "$OCI_PRIVATE_KEY_PEM" > "$HOME/.oci/oci_api_key.pem"
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          value = os.environ.get('OCI_PRIVATE_KEY_PEM', '').strip()
+          if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+              value = value[1:-1]
+          if '\\n' in value and '\n' not in value:
+              value = value.replace('\\r', '').replace('\\n', '\n')
+          Path.home().joinpath('.oci/oci_api_key.pem').write_text(value.replace('\r', '').strip() + '\n', encoding='utf-8')
+          PY
           chmod 600 "$HOME/.oci/oci_api_key.pem"
+          FINGERPRINT="$(printf '%s' "$OCI_FINGERPRINT_VALUE" | tr -d '[:space:]')"
           cat > "$HOME/.oci/config" <<EOF
           [DEFAULT]
           user=${{ secrets.OCI_USER_OCID }}
-          fingerprint=${{ secrets.OCI_FINGERPRINT }}
+          fingerprint=$FINGERPRINT
           tenancy=${{ secrets.OCI_TENANCY_OCID }}
           region=${{ vars.OCI_REGION }}
           key_file=$HOME/.oci/oci_api_key.pem
           EOF
+          chmod 600 "$HOME/.oci/config"
       - name: Set container image variable
         shell: bash
         run: echo "TF_VAR_gateway_image=ghcr.io/${GITHUB_REPOSITORY,,}:latest" >> "$GITHUB_ENV"
