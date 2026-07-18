@@ -45,9 +45,7 @@ COPY package.json ./
 COPY --from=dependencies /app/package-lock.json ./package-lock.json
 COPY src ./src
 COPY public ./public
-COPY docker-entrypoint.sh ./docker-entrypoint.sh
-RUN chmod 0755 /app/docker-entrypoint.sh \
-  && mkdir -p /data \
+RUN mkdir -p /data \
   && chown -R node:node /app /data
 
 USER node
@@ -55,4 +53,4 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:3000/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
 ENTRYPOINT ["dumb-init", "--"]
-CMD ["/app/docker-entrypoint.sh"]
+CMD ["node", "src/server.js"]
