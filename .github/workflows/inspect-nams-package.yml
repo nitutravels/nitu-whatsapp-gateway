@@ -1,4 +1,5 @@
 name: Inspect NAMS package
+run-name: Inspect stored NAMS package
 
 on:
   push:
