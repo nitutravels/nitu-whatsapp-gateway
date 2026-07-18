@@ -41,7 +41,7 @@ jobs:
       - uses: docker/build-push-action@v7
         with:
           context: .
-          platforms: linux/arm64
+          platforms: linux/amd64
           push: true
           tags: |
             ${{ steps.image.outputs.name }}:latest
@@ -64,6 +64,9 @@ jobs:
       TF_INPUT: "false"
       TF_VAR_tenancy_ocid: ${{ secrets.OCI_TENANCY_OCID }}
       TF_VAR_region: ${{ vars.OCI_REGION }}
+      TF_VAR_instance_shape: "VM.Standard.E2.1.Micro"
+      TF_VAR_instance_ocpus: "1"
+      TF_VAR_instance_memory_gbs: "1"
       TF_VAR_gateway_api_key: ${{ secrets.GATEWAY_API_KEY }}
       TF_VAR_gateway_admin_token: ${{ secrets.GATEWAY_ADMIN_TOKEN }}
       TF_VAR_gateway_webhook_secret: ${{ secrets.GATEWAY_WEBHOOK_SECRET }}
@@ -236,10 +239,28 @@ jobs:
       - run: terraform validate
       - run: terraform plan -out=tfplan
       - run: terraform apply -auto-approve tfplan
+      - name: Write deployment details
+        shell: bash
+        run: |
+          jq -n \
+            --arg public_ip "$(terraform output -raw public_ip)" \
+            --arg dashboard_url "$(terraform output -raw dashboard_url)" \
+            --arg health_url "$(terraform output -raw health_url)" \
+            --arg instance_id "$(terraform output -raw instance_id)" \
+            --arg shape "$TF_VAR_instance_shape" \
+            '{public_ip:$public_ip,dashboard_url:$dashboard_url,health_url:$health_url,instance_id:$instance_id,shape:$shape}' \
+            > deployment-details.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deployment-details
+          path: infra/terraform/deployment-details.json
+          if-no-files-found: error
+          retention-days: 7
       - name: Publish deployment details
         shell: bash
         run: |
           echo "## Oracle deployment" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Shape: $TF_VAR_instance_shape" >> "$GITHUB_STEP_SUMMARY"
           echo "- Dashboard: $(terraform output -raw dashboard_url)" >> "$GITHUB_STEP_SUMMARY"
           echo "- Public IP: $(terraform output -raw public_ip)" >> "$GITHUB_STEP_SUMMARY"
           echo "- Health check: $(terraform output -raw health_url)" >> "$GITHUB_STEP_SUMMARY"
