@@ -1,10 +1,15 @@
 name: Priority WhatsApp gateway recovery
 
-# Trigger: deploy asynchronous QR-first recovery.
 on:
   push:
     branches: [main]
-    paths: ['.github/workflows/force-gateway-recovery.yml']
+    paths:
+      - '.github/workflows/force-gateway-recovery.yml'
+      - 'src/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'Dockerfile'
+      - 'scripts/recover-whatsapp.sh'
 
 permissions:
   contents: write
@@ -76,7 +81,7 @@ jobs:
           fi
 
           script_url="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/scripts/recover-whatsapp.sh"
-          command_text="curl -fsSL '$script_url' -o /tmp/nitu-wa-recover.sh && chmod 700 /tmp/nitu-wa-recover.sh && /tmp/nitu-wa-recover.sh '$IMAGE'"
+          command_text="curl -fsSL '$script_url' -o /tmp/nitu-wa-recover.sh && chmod 700 /tmp/nitu-wa-recover.sh && /tmp/nitu-wa-recover.sh '$IMAGE' '918901066699'"
           if [ "${#command_text}" -gt 4000 ]; then
             echo 'RECOVERY_RESULT=failed'
             echo 'ERROR=Generated Oracle command exceeds safe inline length.'
@@ -92,7 +97,7 @@ jobs:
             --content file:///tmp/content.json \
             --target file:///tmp/target.json \
             --timeout-in-seconds 1800 \
-            --display-name 'Nitu WhatsApp QR recovery' \
+            --display-name 'Nitu WhatsApp browser and pairing recovery' \
             --query 'data.id' --raw-output)"
           echo 'INSTANCE_COMMAND_CREATED=yes'
 
@@ -122,10 +127,11 @@ jobs:
             status="$(jq -r '.status // "unknown"' /tmp/status.json 2>/dev/null || echo unknown)"
             is_ready="$(jq -r '.ready // false' /tmp/status.json 2>/dev/null || echo false)"
             has_qr="$(jq -r '((.qrDataUrl // "") | length) > 20' /tmp/status.json 2>/dev/null || echo false)"
+            has_code="$(jq -r '((.pairingCode // "") | length) >= 8' /tmp/status.json 2>/dev/null || echo false)"
             last_error="$(jq -r '.lastError // ""' /tmp/status.json 2>/dev/null || true)"
-            echo "VERIFY_ATTEMPT=$attempt HEALTH_HTTP=$health_code STATUS_HTTP=$status_code STATUS=$status READY=$is_ready HAS_QR=$has_qr LAST_ERROR_PRESENT=$([ -n "$last_error" ] && echo yes || echo no)"
+            echo "VERIFY_ATTEMPT=$attempt HEALTH_HTTP=$health_code STATUS_HTTP=$status_code STATUS=$status READY=$is_ready HAS_QR=$has_qr HAS_CODE=$has_code LAST_ERROR_PRESENT=$([ -n "$last_error" ] && echo yes || echo no)"
             if [ "$health_code" = 200 ] && [ "$status_code" = 200 ]; then
-              if [ "$is_ready" = true ] || { [ "$status" = awaiting_pairing ] && [ "$has_qr" = true ]; }; then
+              if [ "$is_ready" = true ] || { [ "$status" = awaiting_pairing ] && { [ "$has_qr" = true ] || [ "$has_code" = true ]; }; }; then
                 verified=1
                 break
               fi
@@ -133,7 +139,7 @@ jobs:
             sleep 10
           done
 
-          echo -n 'FINAL_STATUS='; jq -c '{status,ready,account,hasQr:((.qrDataUrl // "")|length>20),lastErrorPresent:((.lastError // "")|length>0),queue}' /tmp/status.json 2>/dev/null || cat /tmp/status.json; echo
+          echo -n 'FINAL_STATUS='; jq -c '{status,ready,operationalReady,providerState,account,hasQr:((.qrDataUrl // "")|length>20),hasPairingCode:((.pairingCode // "")|length>=8),lastErrorPresent:((.lastError // "")|length>0),queue}' /tmp/status.json 2>/dev/null || cat /tmp/status.json; echo
           if [ "$verified" -eq 1 ]; then
             echo 'RECOVERY_RESULT=success'
           else
@@ -151,5 +157,5 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add docs/priority-gateway-recovery-result.txt
-          git diff --cached --quiet || git commit -m 'Record QR-first recovery result'
+          git diff --cached --quiet || git commit -m 'Record bounded browser recovery result'
           git push origin HEAD:main
