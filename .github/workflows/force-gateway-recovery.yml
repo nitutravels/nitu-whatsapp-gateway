@@ -1,6 +1,6 @@
 name: Priority WhatsApp gateway recovery
 
-# Priority execution trigger after watchdog image publication.
+# Priority execution trigger using Oracle's nested content.source schema.
 on:
   push:
     branches: [main]
@@ -98,7 +98,7 @@ jobs:
           exit 22
           REMOTE
           encoded="$(base64 -w0 /tmp/remote-recover.sh)"
-          jq -n --arg text "printf '%s' '$encoded' | base64 -d | bash" '{sourceType:"TEXT",text:$text}' > /tmp/content.json
+          jq -n --arg text "printf '%s' '$encoded' | base64 -d | bash" '{source:{sourceType:"TEXT",text:$text},output:{outputType:"TEXT"}}' > /tmp/content.json
           jq -n --arg id "$instance_id" '{instanceId:$id}' > /tmp/target.json
 
           command_id="$(oci instance-agent command create \
