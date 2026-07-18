@@ -1,8 +1,8 @@
 resource "oci_core_instance" "gateway" {
-  availability_domain = local.availability_domain
-  compartment_id      = var.compartment_ocid
-  display_name        = "nitu-whatsapp-gateway"
-  shape               = var.instance_shape
+  availability_domain  = local.availability_domain
+  compartment_id       = var.compartment_ocid
+  display_name         = "nitu-whatsapp-gateway"
+  shape                = var.instance_shape
   preserve_boot_volume = true
 
   shape_config {
@@ -47,7 +47,7 @@ resource "oci_core_instance" "gateway" {
 
 data "oci_core_vnic_attachments" "gateway" {
   compartment_id = var.compartment_ocid
-  instance_id     = oci_core_instance.gateway.id
+  instance_id    = oci_core_instance.gateway.id
 }
 
 data "oci_core_vnic" "gateway" {
