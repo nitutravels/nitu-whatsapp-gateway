@@ -49,13 +49,13 @@ jobs:
           chmod 600 "$HOME/.oci/config"
           curl -fsSL 'https://github.com/nitutravels/nitu-whatsapp-gateway/archive/5a772d257fb505f75a6f6f1eea55a1d12914d2ad.tar.gz' | tar -xz -C /tmp/src --strip-components=1
           cd /tmp/src/infra/terraform
-          terraform init -reconfigure -no-color -backend-config="bucket=$BUCKET" -backend-config="namespace=$NS" -backend-config="region=${{ vars.OCI_REGION }}" -backend-config="key=nitu-whatsapp-gateway/terraform.tfstate" -backend-config="auth=APIKey" -backend-config="config_file_profile=DEFAULT" >/tmp/init.log 2>&1
-          echo "init_exit=$?"
-          terraform apply -auto-approve -no-color >/tmp/apply.log 2>&1
+          terraform init -reconfigure -no-color -backend-config="bucket=$BUCKET" -backend-config="namespace=$NS" -backend-config="region=${{ vars.OCI_REGION }}" -backend-config="key=nitu-whatsapp-gateway/terraform.tfstate" -backend-config="auth=APIKey" -backend-config="config_file_profile=DEFAULT" >/dev/null 2>&1
+          terraform apply -auto-approve -compact-warnings -no-color >/tmp/apply.log 2>&1
           RC=$?
           echo "apply_exit=$RC"
-          tail -n 80 /tmp/apply.log
-          if [ "$RC" -eq 0 ]; then
+          if [ "$RC" -ne 0 ]; then
+            grep -n -B4 -A24 '^Error:' /tmp/apply.log || tail -n 35 /tmp/apply.log
+          else
             echo "public_ip=$(terraform output -raw public_ip)"
             echo "dashboard_url=$(terraform output -raw dashboard_url)"
             echo "health_url=$(terraform output -raw health_url)"
