@@ -1,0 +1,40 @@
+CONTROL_PLANE_RECOVERY_BEGIN
+SOURCE_COMMIT=32fb2b61aa9f3e43c7dd965e8541b1a025eb7f54
+TARGET_IMAGE=ghcr.io/nitutravels/nitu-whatsapp-gateway:32fb2b61aa9f3e43c7dd965e8541b1a025eb7f54
+STEP=wait_for_exact_image
+IMAGE_AVAILABLE_AT_ATTEMPT=8
+STEP=resolve_instance
+INSTANCE_ID=ocid1.instance.oc1.ap-mumbai-1.anrg6ljr724yghqc4d6hgbco7f5bbllsi6wfqjxlgust5idcqcrcouf2kmoq
+INSTANCE_BEFORE={"lifecycleState":"RUNNING","shape":"VM.Standard.E2.1.Micro","agentConfig":{"are-all-plugins-disabled":false,"is-management-disabled":false,"is-monitoring-disabled":false,"plugins-config":null}}
+
+PUBLIC_IP=137.23.58.166
+DNS_A=137.23.58.166
+STEP=pin_exact_image_in_instance_metadata
+METADATA_IMAGE_PINNED=yes
+STEP=enable_run_command_plugin
+STEP=soft_reset_instance
+POWER_ATTEMPT=1 STATE=STOPPING
+POWER_ATTEMPT=2 STATE=RUNNING
+POWER_ATTEMPT=3 STATE=RUNNING
+POWER_ATTEMPT=4 STATE=RUNNING
+STEP=wait_for_gateway_and_systemd_update
+curl: (28) Failed to connect to wa.nitutravels.in port 443 after 8002 ms: Timeout was reached
+curl: (28) Failed to connect to wa.nitutravels.in port 443 after 8002 ms: Timeout was reached
+VERIFY_ATTEMPT=1 HEALTH_HTTP=000 STATUS_HTTP=000 STATUS=unknown READY=false PROVIDER_STATE=unknown HAS_QR=false HAS_CODE=false
+curl: (28) Failed to connect to wa.nitutravels.in port 443 after 8002 ms: Timeout was reached
+curl: (7) Failed to connect to wa.nitutravels.in port 443 after 2298 ms: Couldn't connect to server
+VERIFY_ATTEMPT=2 HEALTH_HTTP=000 STATUS_HTTP=000 STATUS=unknown READY=false PROVIDER_STATE=unknown HAS_QR=false HAS_CODE=false
+VERIFY_ATTEMPT=3 HEALTH_HTTP=502 STATUS_HTTP=502 STATUS= READY= PROVIDER_STATE= HAS_QR= HAS_CODE=
+VERIFY_ATTEMPT=4 HEALTH_HTTP=200 STATUS_HTTP=200 STATUS=starting READY=false PROVIDER_STATE=unknown HAS_QR=false HAS_CODE=false
+VERIFY_ATTEMPT=5 HEALTH_HTTP=200 STATUS_HTTP=200 STATUS=starting READY=false PROVIDER_STATE=UNLAUNCHED HAS_QR=false HAS_CODE=false
+VERIFY_ATTEMPT=6 HEALTH_HTTP=200 STATUS_HTTP=200 STATUS=starting READY=false PROVIDER_STATE=UNLAUNCHED HAS_QR=false HAS_CODE=false
+VERIFY_ATTEMPT=7 HEALTH_HTTP=200 STATUS_HTTP=200 STATUS=starting READY=false PROVIDER_STATE=UNLAUNCHED HAS_QR=false HAS_CODE=false
+VERIFY_ATTEMPT=8 HEALTH_HTTP=200 STATUS_HTTP=200 STATUS=ready READY=true PROVIDER_STATE=CONNECTED HAS_QR=false HAS_CODE=false
+FINAL_GATEWAY_STATUS={"status":"ready","ready":true,"operationalReady":true,"providerState":"CONNECTED","account":null,"recoveryInProgress":false,"pairingInProgress":false,"queue":{"failed":1,"sent":9},"lastErrorPresent":false}
+STEP=verify_run_command_plugin_separately
+RUN_COMMAND_PLUGIN_STATUS=UNKNOWN
+RUN_COMMAND_RESULT=not-tested
+RECOVERY_RESULT=success
+MANAGEMENT_PLANE=degraded
+MANAGEMENT_NOTE=Gateway recovered independently; Oracle Run Command still requires agent investigation.
+CONTROL_PLANE_RECOVERY_END
