@@ -5,11 +5,11 @@ ServiceError:
     "code": "InvalidParameter",
     "logging_tips": "Please run the OCI CLI command using --debug flag to find more debug information.",
     "message": "content.source must not be null",
-    "opc-request-id": "94FE903580D34F519A12E4AF48EF6ADF/7FFF6949B1B400589DA45B6A424F4DCE/4D59A8958338D6FB54C350B249E7D8BB",
+    "opc-request-id": "18C4B4BD5B9A4954BA21C1CC9D3BE4B4/8BD90336A6AB9256D9A45B6A424F4DAE/B85F7B4C10280CBC8E9797729E7811A8",
     "operation_name": "create_instance_agent_command",
     "request_endpoint": "POST https://iaas.ap-mumbai-1.oraclecloud.com/20180530/instanceAgentCommands",
     "status": 400,
     "target_service": "compute_instance_agent",
-    "timestamp": "2026-07-18T16:06:53.969342+00:00",
+    "timestamp": "2026-07-18T16:07:54.147040+00:00",
     "troubleshooting_tips": "See [https://docs.oracle.com/iaas/Content/API/References/apierrors.htm] for more information about resolving this error. If you are unable to resolve this issue, run this CLI command with --debug option and contact Oracle support and provide them the full error message."
 }
