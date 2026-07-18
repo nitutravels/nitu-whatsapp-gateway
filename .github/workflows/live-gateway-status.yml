@@ -1,5 +1,6 @@
 name: Cancel obsolete WhatsApp recovery command
 
+# OCI command summaries expose instance-agent-command-id.
 on:
   push:
     branches: [live-gateway-status]
@@ -57,7 +58,7 @@ jobs:
           pipx install --quiet oci-cli
           echo 'GATEWAY_COMMAND_CANCEL_BEGIN'
           commands_json="$(oci instance-agent command list --compartment-id "$COMPARTMENT_OCID" --all --output json)"
-          mapfile -t command_ids < <(jq -r '.data[]? | select(."display-name" == "Nitu WhatsApp priority recovery") | select((."is-canceled" // false) != true) | .id' <<<"$commands_json")
+          mapfile -t command_ids < <(jq -r '.data[]? | select(."display-name" == "Nitu WhatsApp priority recovery") | select((."is-canceled" // false) != true) | ."instance-agent-command-id" // empty' <<<"$commands_json")
           echo "MATCHING_ACTIVE_COMMANDS=${#command_ids[@]}"
           canceled=0
           for command_id in "${command_ids[@]}"; do
@@ -70,7 +71,7 @@ jobs:
           verify_json="$(oci instance-agent command list --compartment-id "$COMPARTMENT_OCID" --all --output json)"
           remaining="$(jq '[.data[]? | select(."display-name" == "Nitu WhatsApp priority recovery") | select((."is-canceled" // false) != true)] | length' <<<"$verify_json")"
           echo "REMAINING_NOT_CANCELED=$remaining"
-          jq -c '.data[]? | select(."display-name" == "Nitu WhatsApp priority recovery") | {id,displayName:."display-name",isCanceled:."is-canceled",timeCreated:."time-created"}' <<<"$verify_json" || true
+          jq -c '.data[]? | select(."display-name" == "Nitu WhatsApp priority recovery") | {commandId:."instance-agent-command-id",displayName:."display-name",isCanceled:."is-canceled",timeCreated:."time-created"}' <<<"$verify_json" || true
           [ "$remaining" -eq 0 ]
           echo 'GATEWAY_COMMAND_CANCEL_END'
 
