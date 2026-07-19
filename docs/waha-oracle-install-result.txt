@@ -1,11 +1,37 @@
-WAHA_BLUE_GREEN_INSTALL_BEGIN
-STARTED_AT=2026-07-19T12:16:08Z
-PRIMARY_SHAPE_LAUNCH_FAILED=yes
+WAHA_INPLACE_INSTALL_BEGIN
+STARTED_AT=2026-07-19T12:27:52Z
+INSTANCE_ID=ocid1.instance.oc1.ap-mumbai-1.anrg6ljr724yghqc4d6hgbco7f5bbllsi6wfqjxlgust5idcqcrcouf2kmoq
+INSTANCE_SHAPE=VM.Standard.E2.1.Micro
+RESERVED_PUBLIC_IP=137.23.58.166
+PRESERVED_BOOT_VOLUME=ocid1.bootvolume.oc1.ap-mumbai-1.abrg6ljrkoazxrkea4slxzw55oqmtfdsncly3c7odpf633wd2tzhdvw67fwq
+REPLACEMENT_IMAGE=ocid1.image.oc1.ap-mumbai-1.aaaaaaaafosoehxawhzdbpie7m5p2i652dkpiesgkxhopeywtc4qw3lvtqpq
+STOPPING_INSTANCE=yes
+Action completed. Waiting until the resource has entered state: ('STOPPED',)
+BOOT_VOLUME_REPLACEMENT_BEGIN=yes
+Action completed. Waiting until the resource has entered state: ('STOPPED',)
+BOOT_VOLUME_REPLACEMENT_COMPLETE=yes
+ServiceError:
+{
+    "client_version": "Oracle-PythonSDK/2.182.0, Oracle-PythonCLI/3.89.2",
+    "code": "Conflict",
+    "logging_tips": "Please run the OCI CLI command using --debug flag to find more debug information.",
+    "message": "instance ocid1.instance.oc1.ap-mumbai-1.anrg6ljr724yghqc4d6hgbco7f5bbllsi6wfqjxlgust5idcqcrcouf2kmoq is currently being modified, try again later",
+    "opc-request-id": "71850462B43A4E848452431B7C23FEC0/B8DFB84750B08F261FC35C6A424F4D36/70E62F5AEFB9EE5FF67B4CDFD9F4D1EF",
+    "operation_name": "instance_action",
+    "request_endpoint": "POST https://iaas.ap-mumbai-1.oraclecloud.com/20160918/instances/ocid1.instance.oc1.ap-mumbai-1.anrg6ljr724yghqc4d6hgbco7f5bbllsi6wfqjxlgust5idcqcrcouf2kmoq",
+    "status": 409,
+    "target_service": "compute",
+    "timestamp": "2026-07-19T12:29:19.899889+00:00",
+    "troubleshooting_tips": "See [https://docs.oracle.com/iaas/Content/API/References/apierrors.htm] for more information about resolving this error. If you are unable to resolve this issue, run this CLI command with --debug option and contact Oracle support and provide them the full error message."
+}
+INSTALL_FAILURE_CODE=1
+ROLLBACK_BEGIN=yes
+ROLLBACK_RESULT=failed
+    "status": 409,
+    "target_service": "compute",
+    "timestamp": "2026-07-19T12:29:23.830116+00:00",
+    "troubleshooting_tips": "See [https://docs.oracle.com/iaas/Content/API/References/apierrors.htm] for more information about resolving this error. If you are unable to resolve this issue, run this CLI command with --debug option and contact Oracle support and provide them the full error message."
+}
 INSTALL_RESULT=failed
-ERROR=Could not launch an isolated free-tier WAHA candidate
-    "timestamp": "2026-07-19T12:16:26.855474+00:00",
-    "troubleshooting_tips": "See [https://docs.oracle.com/iaas/Content/API/References/apierrors.htm] for more information about resolving this error. If you are unable to resolve this issue, run this CLI command with --debug option and contact Oracle support and provide them the full error message."
-}
-    "timestamp": "2026-07-19T12:18:10.224832+00:00",
-    "troubleshooting_tips": "See [https://docs.oracle.com/iaas/Content/API/References/apierrors.htm] for more information about resolving this error. If you are unable to resolve this issue, run this CLI command with --debug option and contact Oracle support and provide them the full error message."
-}
+FINISHED_AT=2026-07-19T12:29:23Z
+WAHA_INPLACE_INSTALL_END
