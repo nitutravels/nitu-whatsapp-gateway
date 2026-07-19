@@ -1,4 +1,4 @@
-name: Install and verify WAHA production
+name: Install WAHA through official Oracle OCI MCP
 
 on:
   pull_request:
@@ -9,52 +9,230 @@ permissions:
   packages: write
 
 concurrency:
-  group: manual-waha-oracle-install
+  group: official-oracle-mcp-waha-install
   cancel-in-progress: true
 
 jobs:
   install:
     runs-on: ubuntu-latest
     environment: production
-    timeout-minutes: 50
+    timeout-minutes: 55
     steps:
       - uses: actions/checkout@v7
+
       - uses: docker/setup-buildx-action@v4
+
       - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and publish WAHA ARM64 image
+
+      - name: Build and publish pinned WAHA ARM64 image
         uses: docker/build-push-action@v7
         with:
           context: .
           push: true
           platforms: linux/arm64
-          tags: ghcr.io/nitutravels/nitu-whatsapp-gateway:manual-waha-install-20260719
-          cache-from: type=gha,scope=manual-waha-install
-          cache-to: type=gha,mode=max,scope=manual-waha-install
-      - name: Configure OCI
+          tags: ghcr.io/nitutravels/nitu-whatsapp-gateway:official-mcp-waha-20260719
+          cache-from: type=gha,scope=official-mcp-waha
+          cache-to: type=gha,mode=max,scope=official-mcp-waha
+
+      - name: Configure OCI profile
+        shell: bash
         env:
-          KEY: ${{ secrets.OCI_PRIVATE_KEY }}
-          FP: ${{ secrets.OCI_FINGERPRINT }}
-          USER_OCID: ${{ secrets.OCI_USER_OCID }}
-          TENANCY: ${{ secrets.OCI_TENANCY_OCID }}
-          REGION: ${{ vars.OCI_REGION }}
+          OCI_PRIVATE_KEY_PEM: ${{ secrets.OCI_PRIVATE_KEY }}
+          OCI_FINGERPRINT_VALUE: ${{ secrets.OCI_FINGERPRINT }}
+          OCI_USER_OCID: ${{ secrets.OCI_USER_OCID }}
+          OCI_TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
+          OCI_REGION: ${{ vars.OCI_REGION }}
         run: |
-          mkdir -p ~/.oci
-          python -c 'import os,pathlib;v=os.environ["KEY"].strip().strip("\"'\''").replace("\\r","").replace("\\n","\n");pathlib.Path.home().joinpath(".oci/key.pem").write_text(v.strip()+"\n")'
-          chmod 600 ~/.oci/key.pem
-          printf '[DEFAULT]\nuser=%s\nfingerprint=%s\ntenancy=%s\nregion=%s\nkey_file=%s/.oci/key.pem\n' "$USER_OCID" "$(echo "$FP"|tr -d '[:space:]')" "$TENANCY" "$REGION" "$HOME" > ~/.oci/config
-          chmod 600 ~/.oci/config
-          pipx install --quiet oci-cli >/dev/null 2>&1
-      - name: Deploy WAHA without reboot
+          set -Eeuo pipefail
+          mkdir -p "$HOME/.oci"
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          value = os.environ['OCI_PRIVATE_KEY_PEM'].strip()
+          if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+              value = value[1:-1]
+          if '\\n' in value and '\n' not in value:
+              value = value.replace('\\r', '').replace('\\n', '\n')
+          Path.home().joinpath('.oci/key.pem').write_text(value.replace('\r', '').strip() + '\n')
+          PY
+          chmod 600 "$HOME/.oci/key.pem"
+          fingerprint="$(printf '%s' "$OCI_FINGERPRINT_VALUE" | tr -d '[:space:]')"
+          cat > "$HOME/.oci/config" <<EOF
+          [DEFAULT]
+          user=$OCI_USER_OCID
+          fingerprint=$fingerprint
+          tenancy=$OCI_TENANCY_OCID
+          region=$OCI_REGION
+          key_file=$HOME/.oci/key.pem
+          EOF
+          chmod 600 "$HOME/.oci/config"
+          pipx install --quiet uv
+
+      - name: Pin WAHA image through official Oracle OCI Cloud MCP
+        shell: bash
         env:
           COMPARTMENT_OCID: ${{ vars.OCI_COMPARTMENT_OCID }}
+          TARGET_IMAGE: ghcr.io/nitutravels/nitu-whatsapp-gateway:official-mcp-waha-20260719
+          OCI_CONFIG_PROFILE: DEFAULT
+          FASTMCP_LOG_LEVEL: ERROR
+        run: |
+          set -Eeuo pipefail
+          uv run --with 'mcp>=1.0' python - <<'PY'
+          import asyncio, base64, json, os, re
+          from mcp import ClientSession, StdioServerParameters
+          from mcp.client.stdio import stdio_client
+
+          def text_payload(result):
+              return ''.join(getattr(item, 'text', '') for item in result.content)
+
+          def parse_json(text):
+              text = text.strip()
+              try:
+                  return json.loads(text)
+              except Exception:
+                  start = text.find('{')
+                  end = text.rfind('}')
+                  if start >= 0 and end > start:
+                      return json.loads(text[start:end+1])
+                  raise
+
+          async def call(session, name, args):
+              result = await session.call_tool(name, args)
+              if getattr(result, 'isError', False):
+                  raise RuntimeError(text_payload(result))
+              return parse_json(text_payload(result))
+
+          async def main():
+              server = StdioServerParameters(
+                  command='uvx',
+                  args=['oracle.oci-cloud-mcp-server@latest'],
+                  env={**os.environ, 'OCI_CONFIG_PROFILE': 'DEFAULT', 'FASTMCP_LOG_LEVEL': 'ERROR'},
+              )
+              async with stdio_client(server) as (read, write):
+                  async with ClientSession(read, write) as session:
+                      await session.initialize()
+                      listed = await call(session, 'invoke_oci_api', {
+                          'client_fqn': 'oci.core.ComputeClient',
+                          'operation': 'list_instances',
+                          'params': {'compartment_id': os.environ['COMPARTMENT_OCID']},
+                          'fields': ['id', 'display_name', 'lifecycle_state'],
+                          'max_results': 20,
+                          'result_mode': 'full',
+                      })
+                      data = listed.get('data', [])
+                      if isinstance(data, dict):
+                          data = data.get('items', data.get('results', []))
+                      target = next((x for x in data if x.get('display_name') == 'nitu-whatsapp-gateway' and x.get('lifecycle_state') != 'TERMINATED'), None)
+                      if not target:
+                          raise RuntimeError('Oracle instance nitu-whatsapp-gateway was not found')
+                      instance_id = target['id']
+
+                      current = await call(session, 'invoke_oci_api', {
+                          'client_fqn': 'oci.core.ComputeClient',
+                          'operation': 'get_instance',
+                          'params': {'instance_id': instance_id},
+                          'fields': ['display_name', 'lifecycle_state', 'metadata'],
+                          'result_mode': 'full',
+                      })
+                      instance = current.get('data', {})
+                      metadata = dict(instance.get('metadata') or {})
+                      encoded = metadata.get('gateway_env_b64', '')
+                      if not encoded:
+                          raise RuntimeError('gateway_env_b64 metadata is absent; refusing destructive replacement')
+                      env_text = base64.b64decode(encoded).decode('utf-8')
+                      target_image = os.environ['TARGET_IMAGE']
+                      if re.search(r'^GATEWAY_IMAGE=.*$', env_text, flags=re.M):
+                          env_text = re.sub(r'^GATEWAY_IMAGE=.*$', f'GATEWAY_IMAGE={target_image}', env_text, flags=re.M)
+                      else:
+                          env_text = f'GATEWAY_IMAGE={target_image}\n' + env_text
+                      metadata['gateway_env_b64'] = base64.b64encode(env_text.encode()).decode()
+
+                      await call(session, 'invoke_oci_api', {
+                          'client_fqn': 'oci.core.ComputeClient',
+                          'operation': 'update_instance',
+                          'params': {
+                              'instance_id': instance_id,
+                              'update_instance_details': {'metadata': metadata},
+                          },
+                          'fields': ['display_name', 'lifecycle_state'],
+                          'result_mode': 'full',
+                      })
+
+                      attachments = await call(session, 'invoke_oci_api', {
+                          'client_fqn': 'oci.core.ComputeClient',
+                          'operation': 'list_vnic_attachments',
+                          'params': {'compartment_id': os.environ['COMPARTMENT_OCID'], 'instance_id': instance_id},
+                          'fields': ['vnic_id', 'lifecycle_state'],
+                          'max_results': 10,
+                          'result_mode': 'full',
+                      })
+                      items = attachments.get('data', [])
+                      if isinstance(items, dict):
+                          items = items.get('items', items.get('results', []))
+                      attachment = next((x for x in items if x.get('lifecycle_state') == 'ATTACHED'), None)
+                      if not attachment:
+                          raise RuntimeError('Attached VNIC was not found')
+
+                      vnic = await call(session, 'invoke_oci_api', {
+                          'client_fqn': 'oci.core.VirtualNetworkClient',
+                          'operation': 'get_vnic',
+                          'params': {'vnic_id': attachment['vnic_id']},
+                          'fields': ['public_ip'],
+                          'result_mode': 'full',
+                      })
+                      public_ip = (vnic.get('data') or {}).get('public_ip')
+                      if not public_ip:
+                          raise RuntimeError('Oracle VNIC has no public IP')
+
+                      print(f'MCP_INSTANCE_LIFECYCLE={instance.get("lifecycle_state", "unknown")}')
+                      print(f'MCP_IMAGE_PINNED={target_image}')
+                      print(f'MCP_PUBLIC_IP={public_ip}')
+                      with open('/tmp/oracle-public-ip', 'w') as fh:
+                          fh.write(public_ip)
+
+          asyncio.run(main())
+          PY
+
+      - name: Verify WAHA installation and create or start session
+        shell: bash
+        env:
           DOMAIN: ${{ vars.GATEWAY_DOMAIN || 'wa.nitutravels.in' }}
           API_KEY: ${{ secrets.GATEWAY_API_KEY }}
-          IMAGE: ghcr.io/nitutravels/nitu-whatsapp-gateway:manual-waha-install-20260719
-          SESSION_NAME: nitu-travels
         run: |
-          chmod 0755 scripts/deploy-waha.sh
-          scripts/deploy-waha.sh
+          set -Eeuo pipefail
+          public_ip="$(cat /tmp/oracle-public-ip)"
+          curl_base=(--silent --show-error --connect-timeout 8 --max-time 25 --resolve "$DOMAIN:443:$public_ip")
+          health_ok=0
+          session_ok=0
+          for attempt in $(seq 1 180); do
+            health_code="$(curl "${curl_base[@]}" -o /tmp/health.json -w '%{http_code}' "https://$DOMAIN/health" || true)"
+            session_code="$(curl "${curl_base[@]}" -H "X-Api-Key: $API_KEY" -o /tmp/session.json -w '%{http_code}' "https://$DOMAIN/api/sessions/nitu-travels" || true)"
+            status="$(jq -r '.status // "unknown"' /tmp/session.json 2>/dev/null || echo unknown)"
+            echo "VERIFY_ATTEMPT=$attempt HEALTH_HTTP=${health_code:-000} SESSION_HTTP=${session_code:-000} STATUS=$status"
+            [ "$health_code" = 200 ] && health_ok=1
+            if [ "$health_code" = 200 ] && [ "$session_code" = 404 ]; then
+              curl "${curl_base[@]}" -H "X-Api-Key: $API_KEY" -H 'Content-Type: application/json' -X POST --data '{"name":"nitu-travels"}' "https://$DOMAIN/api/sessions" >/dev/null || true
+            elif [ "$session_code" = 200 ]; then
+              case "$status" in
+                WORKING|SCAN_QR_CODE|PASSKEY_REQUIRED|PASSKEY_CONFIRMATION_REQUIRED)
+                  session_ok=1
+                  break
+                  ;;
+                STOPPED)
+                  curl "${curl_base[@]}" -H "X-Api-Key: $API_KEY" -H 'Content-Type: application/json' -X POST --data '{}' "https://$DOMAIN/api/sessions/nitu-travels/start" >/dev/null || true
+                  ;;
+                FAILED)
+                  curl "${curl_base[@]}" -H "X-Api-Key: $API_KEY" -H 'Content-Type: application/json' -X POST --data '{}' "https://$DOMAIN/api/sessions/nitu-travels/restart" >/dev/null || true
+                  ;;
+              esac
+            fi
+            sleep 10
+          done
+          echo -n 'FINAL_WAHA_STATUS='
+          jq -c '{name,status,engine:(.engine.engine // .engine.name // null),me:(if .me then {id:.me.id,pushName:.me.pushName} else null end)}' /tmp/session.json 2>/dev/null || cat /tmp/session.json
+          test "$health_ok" -eq 1
+          test "$session_ok" -eq 1
