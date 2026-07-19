@@ -76,6 +76,13 @@ export async function registerRoutes(app, transport, queueWorker) {
     }
   });
 
+  app.post('/api/v1/messages/statuses', { preHandler: requireApiKey }, async (request, reply) => {
+    const parsed = z.object({ ids: z.array(z.string().uuid()).min(1).max(100) }).safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: 'Provide between 1 and 100 valid message IDs' });
+    const messages = parsed.data.ids.map(id => getMessage(id)).filter(Boolean);
+    return { messages };
+  });
+
   app.get('/api/v1/messages/:id', { preHandler: requireApiKey }, async (request, reply) => {
     const record = getMessage(request.params.id);
     return record || reply.code(404).send({ error: 'Not found' });
