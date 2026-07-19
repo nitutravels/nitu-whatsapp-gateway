@@ -8,6 +8,10 @@ on:
       - '.github/workflows/waha-direct-install-fixed.yml'
       - 'scripts/deploy-waha-direct.sh'
       - 'deploy/WAHA_DIRECT_INSTALL_FIXED'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'deploy/WAHA_DIRECT_INSTALL_PR'
 
 permissions:
   contents: write
