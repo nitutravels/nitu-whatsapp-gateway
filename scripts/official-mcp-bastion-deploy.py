@@ -1,2 +1,3 @@
 #!/usr/bin/env python3
-# This file is restored from commit 2acde60 by branch ref in the next step.
+# Recovery script content is preserved in commit 2acde60d0a77b486a4e51273b0c87001516f714a.
+# The workflow will fetch that exact blob before execution.
