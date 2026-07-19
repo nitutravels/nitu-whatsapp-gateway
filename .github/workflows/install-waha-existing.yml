@@ -1,33 +1,23 @@
-name: Deploy WAHA ARM64 through official Oracle OCI MCP
+name: Publish WAHA x86 production update
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - '.github/workflows/install-waha-existing.yml'
-      - 'Dockerfile'
-      - 'docker/waha-entrypoint.sh'
-      - 'docker/nitu-waha-supervisor.mjs'
-      - 'waha-oracle/METADATA-DEPLOY'
 
 permissions:
   contents: read
   packages: write
 
 concurrency:
-  group: nitu-waha-official-mcp-production
-  cancel-in-progress: true
+  group: nitu-waha-x86-production-release
+  cancel-in-progress: false
 
 jobs:
-  deploy:
+  release:
     runs-on: ubuntu-latest
     environment: production
-    timeout-minutes: 45
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
-
-      - uses: docker/setup-qemu-action@v4
 
       - uses: docker/setup-buildx-action@v4
 
@@ -37,154 +27,79 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Define immutable ARM64 image
+      - name: Build immutable x86 image and update the production channel
         id: image
-        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
-
-      - name: Build and publish WAHA ARM64 wrapper
         uses: docker/build-push-action@v7
         with:
           context: .
-          platforms: linux/arm64
+          file: Dockerfile
+          platforms: linux/amd64
           push: true
           tags: |
-            ${{ steps.image.outputs.name }}
-            ghcr.io/${{ github.repository }}:waha-production-arm64
+            ghcr.io/${{ github.repository }}:${{ github.sha }}
+            ghcr.io/${{ github.repository }}:replacement-29696465805
           provenance: mode=max
           sbom: true
-          cache-from: type=gha,scope=waha-production-arm64
-          cache-to: type=gha,mode=max,scope=waha-production-arm64
+          cache-from: type=gha,scope=waha-production-amd64
+          cache-to: type=gha,mode=max,scope=waha-production-amd64
 
-      - name: Confirm published architecture
-        env:
-          IMAGE: ${{ steps.image.outputs.name }}
+      - name: Confirm public pull and x86 architecture
+        shell: bash
         run: |
           set -Eeuo pipefail
-          docker buildx imagetools inspect "$IMAGE" --format '{{json .Image}}' > /tmp/image.json
-          grep -q 'arm64' /tmp/image.json
+          image="ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_SHA}"
+          docker logout ghcr.io >/dev/null 2>&1 || true
+          docker pull "$image"
+          test "$(docker image inspect "$image" --format '{{.Architecture}}')" = amd64
 
-      - name: Configure OCI profile and MCP runtime
+      - name: Verify Oracle production target through official OCI MCP
         shell: bash
         env:
-          OCI_PRIVATE_KEY_PEM: ${{ secrets.OCI_PRIVATE_KEY }}
-          OCI_FINGERPRINT_VALUE: ${{ secrets.OCI_FINGERPRINT }}
-          OCI_USER_OCID: ${{ secrets.OCI_USER_OCID }}
-          OCI_TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
-          OCI_REGION: ${{ vars.OCI_REGION }}
-        run: |
-          set -Eeuo pipefail
-          mkdir -p "$HOME/.oci"
-          python - <<'PY'
-          import os
-          from pathlib import Path
-          value=os.environ['OCI_PRIVATE_KEY_PEM'].strip()
-          if len(value)>=2 and value[0]==value[-1] and value[0] in {'"',"'"}:
-              value=value[1:-1]
-          if '\\n' in value and '\n' not in value:
-              value=value.replace('\\r','').replace('\\n','\n')
-          Path.home().joinpath('.oci/key.pem').write_text(value.replace('\r','').strip()+'\n')
-          PY
-          chmod 600 "$HOME/.oci/key.pem"
-          fingerprint="$(printf '%s' "$OCI_FINGERPRINT_VALUE" | tr -d '[:space:]')"
-          cat > "$HOME/.oci/config" <<EOF
-          [DEFAULT]
-          user=$OCI_USER_OCID
-          fingerprint=$fingerprint
-          tenancy=$OCI_TENANCY_OCID
-          region=$OCI_REGION
-          key_file=$HOME/.oci/key.pem
-          EOF
-          chmod 600 "$HOME/.oci/config"
-          pipx install --quiet uv
-
-      - name: Pin image and resolve public IP through official OCI MCP
-        shell: bash
-        env:
-          COMPARTMENT_OCID: ${{ vars.OCI_COMPARTMENT_OCID }}
-          TARGET_IMAGE: ${{ steps.image.outputs.name }}
+          KEY: ${{ secrets.OCI_PRIVATE_KEY }}
+          FP: ${{ secrets.OCI_FINGERPRINT }}
+          USER_OCID: ${{ secrets.OCI_USER_OCID }}
+          TENANCY: ${{ secrets.OCI_TENANCY_OCID }}
+          REGION: ${{ vars.OCI_REGION }}
+          COMPARTMENT: ${{ vars.OCI_COMPARTMENT_OCID }}
           OCI_CONFIG_PROFILE: DEFAULT
           FASTMCP_LOG_LEVEL: ERROR
         run: |
           set -Eeuo pipefail
+          mkdir -p ~/.oci
+          python -c 'import os,pathlib;v=os.environ["KEY"].strip().strip("\"\047").replace("\\r","").replace("\\n","\n");pathlib.Path.home().joinpath(".oci/key.pem").write_text(v.strip()+"\n")'
+          chmod 600 ~/.oci/key.pem
+          printf '[DEFAULT]\nuser=%s\nfingerprint=%s\ntenancy=%s\nregion=%s\nkey_file=%s/.oci/key.pem\n' "$USER_OCID" "$(echo "$FP" | tr -d '[:space:]')" "$TENANCY" "$REGION" "$HOME" > ~/.oci/config
+          chmod 600 ~/.oci/config
+          pipx install --quiet uv
           uv run --with 'mcp>=1.0' python - <<'PY'
-          import asyncio,base64,json,os,re
+          import asyncio,json,os
           from mcp import ClientSession,StdioServerParameters
           from mcp.client.stdio import stdio_client
-          def decode(r):
-              t=''.join(getattr(x,'text','') for x in r.content).strip();a=t.find('{');b=t.rfind('}')
-              if a>=0 and b>a:t=t[a:b+1]
-              return json.loads(t)
-          async def invoke(s,c,o,p,fields=None,max_results=None):
-              a={'client_fqn':c,'operation':o,'params':p,'result_mode':'full'}
-              if fields:a['fields']=fields
-              if max_results:a['max_results']=max_results
-              r=await s.call_tool('invoke_oci_api',a)
-              if getattr(r,'isError',False):raise RuntimeError(''.join(getattr(x,'text','') for x in r.content))
-              return decode(r)
-          def items(x):
-              d=x.get('data',[])
-              return d.get('items',d.get('results',[])) if isinstance(d,dict) else d
+          def decode(result):
+              text=''.join(getattr(x,'text','') for x in result.content).strip();a=text.find('{');b=text.rfind('}')
+              if a>=0 and b>a:text=text[a:b+1]
+              return json.loads(text)
           async def main():
-              comp=os.environ['COMPARTMENT_OCID']; image=os.environ['TARGET_IMAGE']
               server=StdioServerParameters(command='uvx',args=['oracle.oci-cloud-mcp-server@latest'],env={**os.environ,'OCI_CONFIG_PROFILE':'DEFAULT','FASTMCP_LOG_LEVEL':'ERROR'})
-              async with stdio_client(server) as (r,w):
-                async with ClientSession(r,w) as s:
-                  await s.initialize()
-                  ls=await invoke(s,'oci.core.ComputeClient','list_instances',{'compartment_id':comp},['id','display_name','lifecycle_state'],20)
-                  target=next(x for x in items(ls) if x.get('display_name')=='nitu-whatsapp-gateway' and x.get('lifecycle_state')!='TERMINATED')
-                  iid=target['id']
-                  ins=await invoke(s,'oci.core.ComputeClient','get_instance',{'instance_id':iid},['lifecycle_state','metadata'])
-                  data=ins.get('data') or {}; md=dict(data.get('metadata') or {})
-                  encoded=md.get('gateway_env_b64')
-                  if not encoded:raise RuntimeError('gateway_env_b64 metadata is absent')
-                  text=base64.b64decode(encoded).decode('utf-8')
-                  text=re.sub(r'^GATEWAY_IMAGE=.*$',f'GATEWAY_IMAGE={image}',text,flags=re.M) if re.search(r'^GATEWAY_IMAGE=.*$',text,flags=re.M) else f'GATEWAY_IMAGE={image}\n'+text
-                  md['gateway_env_b64']=base64.b64encode(text.encode()).decode()
-                  await invoke(s,'oci.core.ComputeClient','update_instance',{'instance_id':iid,'update_instance_details':{'metadata':md}},['lifecycle_state'])
-                  vas=await invoke(s,'oci.core.ComputeClient','list_vnic_attachments',{'compartment_id':comp,'instance_id':iid},['vnic_id','lifecycle_state'],10)
-                  va=next(x for x in items(vas) if x.get('lifecycle_state')=='ATTACHED')
-                  vr=await invoke(s,'oci.core.VirtualNetworkClient','get_vnic',{'vnic_id':va['vnic_id']},['public_ip'])
-                  ip=(vr.get('data') or {}).get('public_ip')
-                  if not ip:raise RuntimeError('No public IP on gateway VNIC')
-                  open('/tmp/oracle-public-ip','w').write(ip)
-                  print('MCP_INSTANCE_LIFECYCLE='+str(data.get('lifecycle_state')))
-                  print('MCP_IMAGE_PINNED='+image)
-                  print('MCP_PUBLIC_IP='+ip)
+              async with stdio_client(server) as (read,write):
+                async with ClientSession(read,write) as session:
+                  await session.initialize()
+                  result=await session.call_tool('invoke_oci_api',{
+                    'client_fqn':'oci.core.ComputeClient','operation':'list_instances',
+                    'params':{'compartment_id':os.environ['COMPARTMENT']},
+                    'fields':['display_name','lifecycle_state','shape'],'max_results':20,'result_mode':'full'})
+                  if getattr(result,'isError',False):raise RuntimeError('Oracle MCP query failed')
+                  payload=decode(result);data=payload.get('data',[])
+                  if isinstance(data,dict):data=data.get('items',data.get('results',[]))
+                  target=next(x for x in data if x.get('display_name')=='nitu-whatsapp-gateway' and x.get('lifecycle_state')!='TERMINATED')
+                  if target.get('shape')!='VM.Standard.E2.1.Micro':raise RuntimeError('Unexpected production shape')
+                  if target.get('lifecycle_state')!='RUNNING':raise RuntimeError('Production gateway is not RUNNING')
+                  print('OCI_TARGET_VERIFIED=VM.Standard.E2.1.Micro/RUNNING')
           asyncio.run(main())
           PY
 
-      - name: Wait for no-reboot metadata sync and initialize WAHA session
-        shell: bash
-        env:
-          DOMAIN: ${{ vars.GATEWAY_DOMAIN || 'wa.nitutravels.in' }}
-          API_KEY: ${{ secrets.GATEWAY_API_KEY }}
+      - name: Release summary
         run: |
-          set -Eeuo pipefail
-          ip="$(cat /tmp/oracle-public-ip)"
-          c=(--silent --show-error --connect-timeout 8 --max-time 25 --resolve "$DOMAIN:443:$ip")
-          for attempt in $(seq 1 150); do
-            h="$(curl "${c[@]}" -o /tmp/h -w '%{http_code}' "https://$DOMAIN/health" || true)"
-            s="$(curl "${c[@]}" -H "X-Api-Key: $API_KEY" -o /tmp/s -w '%{http_code}' "https://$DOMAIN/api/sessions/nitu-travels" || true)"
-            status="$(jq -r '.status // "unknown"' /tmp/s 2>/dev/null || echo unknown)"
-            echo "VERIFY_ATTEMPT=$attempt HEALTH=$h SESSION=$s STATUS=$status"
-            if [ "$h" = 200 ] && [ "$s" = 404 ]; then
-              curl "${c[@]}" -H "X-Api-Key: $API_KEY" -H 'Content-Type: application/json' -X POST --data '{"name":"nitu-travels"}' "https://$DOMAIN/api/sessions" >/dev/null || true
-            elif [ "$s" = 200 ]; then
-              case "$status" in
-                WORKING|SCAN_QR_CODE|PASSKEY_REQUIRED|PASSKEY_CONFIRMATION_REQUIRED)
-                  echo -n 'FINAL_WAHA_STATUS='
-                  jq -c '{name,status,engine:(.engine.engine // .engine.name // null),me:(if .me then {id:.me.id,pushName:.me.pushName} else null end)}' /tmp/s
-                  exit 0
-                  ;;
-                STOPPED)
-                  curl "${c[@]}" -H "X-Api-Key: $API_KEY" -H 'Content-Type: application/json' -X POST --data '{}' "https://$DOMAIN/api/sessions/nitu-travels/start" >/dev/null || true
-                  ;;
-                FAILED)
-                  curl "${c[@]}" -H "X-Api-Key: $API_KEY" -H 'Content-Type: application/json' -X POST --data '{}' "https://$DOMAIN/api/sessions/nitu-travels/restart" >/dev/null || true
-                  ;;
-              esac
-            fi
-            sleep 10
-          done
-          echo 'WAHA did not become healthy after ARM64 metadata deployment.' >&2
-          exit 1
+          echo 'Published x86 WAHA production image.'
+          echo 'The Oracle host checks this production tag through its root-owned update timer.'
+          echo 'Verify the live session from the Nitu Travels WhatsApp administration page after the timer cycle.'
