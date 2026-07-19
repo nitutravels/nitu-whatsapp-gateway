@@ -6,6 +6,7 @@ import { closeDatabase } from './db.js';
 import { QueueWorker } from './queue.js';
 import { registerRoutes } from './routes.js';
 import { WebhookWorker } from './webhook.js';
+import { WebsiteWorker } from './website-worker.js';
 import { WhatsAppTransport } from './whatsapp.js';
 
 async function main() {
@@ -41,6 +42,7 @@ async function main() {
   const transport = new WhatsAppTransport(app.log);
   const queueWorker = new QueueWorker(transport, app.log);
   const webhookWorker = new WebhookWorker(app.log);
+  const websiteWorker = new WebsiteWorker(app.log);
   await registerRoutes(app, transport, queueWorker);
 
   app.setErrorHandler((error, request, reply) => {
@@ -56,6 +58,7 @@ async function main() {
     app.log.info({ signal }, 'Shutting down gateway');
     queueWorker.stop();
     webhookWorker.stop();
+    websiteWorker.stop();
     await transport.close();
     await app.close();
     closeDatabase();
@@ -75,6 +78,7 @@ async function main() {
   await app.listen({ host: '0.0.0.0', port: config.PORT });
   queueWorker.start();
   webhookWorker.start();
+  websiteWorker.start();
   transport.start().catch(error => {
     app.log.error({ err: error }, 'Initial WhatsApp connection failed');
     transport.scheduleReconnect();
