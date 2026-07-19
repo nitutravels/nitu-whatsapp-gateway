@@ -1,2 +1,2 @@
-Probe requested: 2026-07-19T13:38Z
-Purpose: verify corrected WAHA entrypoint metadata deployment
+Probe requested: 2026-07-19T15:20Z
+Purpose: observe verified x86-64 WAHA metadata rollout without modifying Oracle
