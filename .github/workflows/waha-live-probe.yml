@@ -1,79 +1,36 @@
-name: Repair WAHA host through OCI Bastion
+name: Extract Bastion failure tail
 
 on:
   pull_request:
     branches: [main]
 
 permissions:
-  contents: read
-
-concurrency:
-  group: repair-waha-through-oci-bastion
-  cancel-in-progress: true
+  actions: read
+  contents: write
 
 jobs:
-  repair:
+  extract:
     runs-on: ubuntu-latest
-    environment: production
-    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.ref }}
-
-      - name: Restore validated Bastion repair script
-        run: |
-          set -Eeuo pipefail
-          git fetch --no-tags --depth=1 origin 2acde60d0a77b486a4e51273b0c87001516f714a
-          git show FETCH_HEAD:scripts/official-mcp-bastion-deploy.py > /tmp/official-mcp-bastion-deploy.py
-          python -m py_compile /tmp/official-mcp-bastion-deploy.py
-
-      - name: Configure OCI profile
-        shell: bash
+      - name: Download only the completed job log
         env:
-          KEY: ${{ secrets.OCI_PRIVATE_KEY }}
-          FP: ${{ secrets.OCI_FINGERPRINT }}
-          USER_OCID: ${{ secrets.OCI_USER_OCID }}
-          TENANCY: ${{ secrets.OCI_TENANCY_OCID }}
-          REGION: ${{ vars.OCI_REGION }}
+          GH_TOKEN: ${{ github.token }}
+          JOB_ID: '88215224800'
         run: |
           set -Eeuo pipefail
-          mkdir -p ~/.oci
-          python -c 'import os,pathlib;v=os.environ["KEY"].strip().strip("\"\047").replace("\\r","").replace("\\n","\n");pathlib.Path.home().joinpath(".oci/key.pem").write_text(v.strip()+"\n")'
-          chmod 600 ~/.oci/key.pem
-          printf '[DEFAULT]\nuser=%s\nfingerprint=%s\ntenancy=%s\nregion=%s\nkey_file=%s/.oci/key.pem\n' "$USER_OCID" "$(echo "$FP"|tr -d '[:space:]')" "$TENANCY" "$REGION" "$HOME" > ~/.oci/config
-          chmod 600 ~/.oci/config
-          pipx install --quiet uv
-
-      - name: Enter the VM through managed OCI Bastion and repair Docker
-        shell: bash
-        env:
-          COMPARTMENT_OCID: ${{ vars.OCI_COMPARTMENT_OCID }}
-          TARGET_IMAGE: ghcr.io/nitutravels/nitu-whatsapp-gateway:recovery-29694728675
-          OCI_REGION: ${{ vars.OCI_REGION }}
-          OCI_CONFIG_PROFILE: DEFAULT
-          FASTMCP_LOG_LEVEL: ERROR
+          mkdir -p docs
+          curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/jobs/${JOB_ID}/logs" -o /tmp/job.log
+          tail -n 160 /tmp/job.log \
+            | sed -E 's/(API_KEY|ADMIN_TOKEN|WEBHOOK_SECRET|password|token)=([^[:space:]]+)/\1=***REDACTED***/Ig' \
+            > docs/bastion-failure-tail.txt
+      - name: Persist diagnostic tail
         run: |
-          set -Eeuo pipefail
-          uv run --with 'mcp>=1.0' python /tmp/official-mcp-bastion-deploy.py
-
-      - name: Verify WAHA once after host repair
-        shell: bash
-        env:
-          DOMAIN: ${{ vars.GATEWAY_DOMAIN || 'wa.nitutravels.in' }}
-          API_KEY: ${{ secrets.GATEWAY_API_KEY }}
-        run: |
-          set -Eeuo pipefail
-          health="$(curl -sS --connect-timeout 10 --max-time 30 -o /tmp/health -w '%{http_code}' "https://$DOMAIN/health" || true)"
-          session="$(curl -sS --connect-timeout 10 --max-time 30 -H "X-Api-Key: $API_KEY" -o /tmp/session -w '%{http_code}' "https://$DOMAIN/api/sessions/nitu-travels" || true)"
-          echo "HEALTH_HTTP=$health SESSION_HTTP=$session"
-          if [ "$health" = 200 ] && [ "$session" = 404 ]; then
-            curl -sS -H "X-Api-Key: $API_KEY" -H 'Content-Type: application/json' -X POST --data '{"name":"nitu-travels"}' "https://$DOMAIN/api/sessions" >/dev/null
-            sleep 15
-            session="$(curl -sS -H "X-Api-Key: $API_KEY" -o /tmp/session -w '%{http_code}' "https://$DOMAIN/api/sessions/nitu-travels")"
-          fi
-          status="$(jq -r '.status // "unknown"' /tmp/session 2>/dev/null || echo unknown)"
-          echo "WAHA_SESSION_STATUS=$status"
-          test "$health" = 200
-          test "$session" = 200
-          case "$status" in WORKING|SCAN_QR_CODE|PASSKEY_REQUIRED|PASSKEY_CONFIRMATION_REQUIRED) exit 0;; *) cat /tmp/session; exit 1;; esac
+          git config user.name 'github-actions[bot]'
+          git config user.email '4189826+github-actions[bot]@users.noreply.github.com'
+          git add docs/bastion-failure-tail.txt
+          git diff --cached --quiet || git commit -m 'Record Bastion failure tail'
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
