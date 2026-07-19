@@ -1,0 +1,330 @@
+name: Final blue-green WAHA Oracle installation
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'waha-oracle/BLUEGREEN-FINAL'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nitu-waha-existing-vm-install
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Configure OCI CLI
+        shell: bash
+        env:
+          OCI_PRIVATE_KEY_PEM: ${{ secrets.OCI_PRIVATE_KEY }}
+          OCI_FINGERPRINT_VALUE: ${{ secrets.OCI_FINGERPRINT }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$HOME/.oci"
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          value = os.environ.get('OCI_PRIVATE_KEY_PEM', '').strip()
+          if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+              value = value[1:-1]
+          if '\\n' in value and '\n' not in value:
+              value = value.replace('\\r', '').replace('\\n', '\n')
+          Path.home().joinpath('.oci/key.pem').write_text(value.replace('\r', '').strip() + '\n', encoding='utf-8')
+          PY
+          chmod 600 "$HOME/.oci/key.pem"
+          fingerprint="$(printf '%s' "$OCI_FINGERPRINT_VALUE" | tr -d '[:space:]')"
+          cat > "$HOME/.oci/config" <<EOF
+          [DEFAULT]
+          user=${{ secrets.OCI_USER_OCID }}
+          fingerprint=$fingerprint
+          tenancy=${{ secrets.OCI_TENANCY_OCID }}
+          region=${{ vars.OCI_REGION }}
+          key_file=$HOME/.oci/key.pem
+          EOF
+          chmod 600 "$HOME/.oci/config"
+          pipx install --quiet oci-cli
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Resolve Oracle resources and prepare private bootstrap
+        id: prepare
+        shell: bash
+        env:
+          TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
+          CONFIGURED_COMPARTMENT_OCID: ${{ vars.OCI_COMPARTMENT_OCID }}
+          CONFIGURED_NAMESPACE: ${{ vars.OCI_NAMESPACE }}
+          STATE_BUCKET: ${{ vars.OCI_TF_STATE_BUCKET }}
+          REGION: ${{ vars.OCI_REGION }}
+          WAHA_API_KEY: ${{ secrets.GATEWAY_API_KEY }}
+          WAHA_DASHBOARD_PASSWORD: ${{ secrets.GATEWAY_ADMIN_TOKEN }}
+          WAHA_WEBHOOK_SECRET: ${{ secrets.GATEWAY_WEBHOOK_SECRET }}
+          WAHA_WORKER_KEY: ${{ secrets.GATEWAY_API_KEY }}
+          WAHA_DOMAIN: ${{ vars.GATEWAY_DOMAIN || 'wa.nitutravels.in' }}
+        run: |
+          set -Eeuo pipefail
+          compartment="$CONFIGURED_COMPARTMENT_OCID"
+          if [[ ! "$compartment" =~ ^ocid1\.compartment\. ]]; then
+            compartment="$(oci iam compartment list \
+              --compartment-id "$TENANCY_OCID" \
+              --compartment-id-in-subtree true \
+              --access-level ANY --all --output json | \
+              jq -r '[.data[] | select(.name=="NituWAGateway" and .["lifecycle-state"]=="ACTIVE") | .id][0] // empty')"
+          fi
+          [[ "$compartment" =~ ^ocid1\.compartment\. ]] || { echo 'Unable to resolve Oracle compartment' >&2; exit 1; }
+
+          namespace="$CONFIGURED_NAMESPACE"
+          if [ -z "$namespace" ] || [ "$namespace" = null ]; then
+            namespace="$(oci os ns get --query data --raw-output)"
+          fi
+          [ -n "$namespace" ] || { echo 'Unable to resolve Object Storage namespace' >&2; exit 1; }
+          [ -n "$STATE_BUCKET" ] || { echo 'OCI_TF_STATE_BUCKET is missing' >&2; exit 1; }
+
+          api_b64="$(printf '%s' "$WAHA_API_KEY" | base64 -w0)"
+          dashboard_b64="$(printf '%s' "$WAHA_DASHBOARD_PASSWORD" | base64 -w0)"
+          webhook_b64="$(printf '%s' "$WAHA_WEBHOOK_SECRET" | base64 -w0)"
+          worker_b64="$(printf '%s' "$WAHA_WORKER_KEY" | base64 -w0)"
+
+          installer_object="waha/final-installer-${GITHUB_SHA}.sh"
+          oci os object put \
+            --namespace-name "$namespace" \
+            --bucket-name "$STATE_BUCKET" \
+            --name "$installer_object" \
+            --file waha-oracle/install-waha.sh \
+            --force >/dev/null
+
+          expires="$(date -u -d '+4 hours' '+%Y-%m-%dT%H:%M:%SZ')"
+          installer_uri="$(oci os preauth-request create \
+            --namespace-name "$namespace" \
+            --bucket-name "$STATE_BUCKET" \
+            --name "waha-final-installer-${GITHUB_RUN_ID}" \
+            --access-type ObjectRead \
+            --object-name "$installer_object" \
+            --time-expires "$expires" \
+            --query 'data."access-uri"' --raw-output)"
+          installer_url="https://objectstorage.${REGION}.oraclecloud.com${installer_uri}"
+
+          cat > /tmp/bootstrap.sh <<EOF
+          #!/usr/bin/env bash
+          set -Eeuo pipefail
+          umask 077
+          curl -fsSL '$installer_url' -o /root/install-waha.sh
+          chmod 700 /root/install-waha.sh
+          WAHA_API_KEY_B64='$api_b64' \
+          WAHA_DASHBOARD_PASSWORD_B64='$dashboard_b64' \
+          WAHA_WEBHOOK_SECRET_B64='$webhook_b64' \
+          WAHA_WORKER_KEY_B64='$worker_b64' \
+          WAHA_DOMAIN='$WAHA_DOMAIN' \
+          /root/install-waha.sh
+          EOF
+          chmod 600 /tmp/bootstrap.sh
+
+          bootstrap_object="waha/final-bootstrap-${GITHUB_RUN_ID}.sh"
+          oci os object put \
+            --namespace-name "$namespace" \
+            --bucket-name "$STATE_BUCKET" \
+            --name "$bootstrap_object" \
+            --file /tmp/bootstrap.sh \
+            --force >/dev/null
+          bootstrap_uri="$(oci os preauth-request create \
+            --namespace-name "$namespace" \
+            --bucket-name "$STATE_BUCKET" \
+            --name "waha-final-bootstrap-${GITHUB_RUN_ID}" \
+            --access-type ObjectRead \
+            --object-name "$bootstrap_object" \
+            --time-expires "$expires" \
+            --query 'data."access-uri"' --raw-output)"
+
+          echo "compartment=$compartment" >> "$GITHUB_OUTPUT"
+          echo "bootstrap_url=https://objectstorage.${REGION}.oraclecloud.com${bootstrap_uri}" >> "$GITHUB_OUTPUT"
+
+      - name: Launch, verify and cut over WAHA candidate
+        shell: bash
+        env:
+          COMPARTMENT_OCID: ${{ steps.prepare.outputs.compartment }}
+          BOOTSTRAP_URL: ${{ steps.prepare.outputs.bootstrap_url }}
+          DOMAIN: ${{ vars.GATEWAY_DOMAIN || 'wa.nitutravels.in' }}
+          WAHA_API_KEY: ${{ secrets.GATEWAY_API_KEY }}
+        run: |
+          set -Eeuo pipefail
+          echo 'FINAL_BLUEGREEN_WAHA_BEGIN'
+          echo "STARTED_AT=$(date -u +%FT%TZ)"
+
+          old_id="$(oci compute instance list \
+            --compartment-id "$COMPARTMENT_OCID" \
+            --display-name nitu-whatsapp-gateway --all \
+            --query 'data[?"lifecycle-state"!=`TERMINATED`].id | [0]' \
+            --raw-output)"
+          [[ "$old_id" =~ ^ocid1\.instance\. ]] || { echo 'ERROR=Current gateway instance not found'; exit 1; }
+
+          oci compute instance get --instance-id "$old_id" --output json > /tmp/old.json
+          old_state="$(jq -r '.data["lifecycle-state"]' /tmp/old.json)"
+          ad="$(jq -r '.data["availability-domain"]' /tmp/old.json)"
+          shape="$(jq -r '.data.shape' /tmp/old.json)"
+          image="$(jq -r '.data["image-id"] // .data["source-details"]["image-id"] // empty' /tmp/old.json)"
+          [ "$old_state" = RUNNING ] || { echo "ERROR=Current gateway is not RUNNING ($old_state)"; exit 1; }
+          [ "$shape" = VM.Standard.E2.1.Micro ] || { echo "ERROR=Unexpected current shape $shape"; exit 1; }
+          [[ "$image" =~ ^ocid1\.image\. ]] || { echo 'ERROR=Current Ubuntu image could not be resolved'; exit 1; }
+
+          old_vnic="$(oci compute vnic-attachment list \
+            --compartment-id "$COMPARTMENT_OCID" --instance-id "$old_id" --all \
+            --query 'data[?"lifecycle-state"==`ATTACHED`]."vnic-id" | [0]' --raw-output)"
+          subnet="$(oci network vnic get --vnic-id "$old_vnic" --query 'data."subnet-id"' --raw-output)"
+          reserved_ip="$(oci network vnic get --vnic-id "$old_vnic" --query 'data."public-ip"' --raw-output)"
+          old_private_id="$(oci network private-ip list --vnic-id "$old_vnic" --all \
+            --query 'data[?"is-primary"==`true`].id | [0]' --raw-output)"
+          [[ "$subnet" =~ ^ocid1\.subnet\. ]] || { echo 'ERROR=Subnet not found'; exit 1; }
+          [[ "$reserved_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'ERROR=Reserved IP not found'; exit 1; }
+
+          stale_ids="$(oci compute instance list \
+            --compartment-id "$COMPARTMENT_OCID" \
+            --display-name nitu-waha-gateway --all \
+            --query 'data[?"lifecycle-state"!=`TERMINATED`].id' --raw-output)"
+          for stale in $(jq -r '.[]?' <<<"$stale_ids" 2>/dev/null || true); do
+            echo "TERMINATING_STALE_CANDIDATE=$stale"
+            oci compute instance terminate --instance-id "$stale" --force --preserve-boot-volume false >/dev/null || true
+          done
+          sleep 20
+
+          cat > /tmp/cloud-init.yaml <<EOF
+          #cloud-config
+          package_update: true
+          packages:
+            - curl
+          runcmd:
+            - [bash, -lc, "curl -fsSL '$BOOTSTRAP_URL' -o /root/nitu-waha-bootstrap.sh && chmod 700 /root/nitu-waha-bootstrap.sh && /root/nitu-waha-bootstrap.sh > /var/log/nitu-waha-bootstrap.log 2>&1"]
+          final_message: "Nitu Travels WAHA candidate bootstrap completed"
+          EOF
+          user_data="$(base64 -w0 /tmp/cloud-init.yaml)"
+          jq -n --arg user_data "$user_data" '{user_data:$user_data}' > /tmp/metadata.json
+          cat > /tmp/tags.json <<EOF
+          {"Application":"Nitu WAHA Gateway","ManagedBy":"GitHub Actions","InstallRun":"${GITHUB_RUN_ID}"}
+          EOF
+
+          candidate_id="$(oci compute instance launch \
+            --availability-domain "$ad" \
+            --compartment-id "$COMPARTMENT_OCID" \
+            --subnet-id "$subnet" \
+            --assign-public-ip true \
+            --display-name nitu-waha-gateway \
+            --shape VM.Standard.E2.1.Micro \
+            --image-id "$image" \
+            --metadata file:///tmp/metadata.json \
+            --freeform-tags file:///tmp/tags.json \
+            --wait-for-state RUNNING --max-wait-seconds 1200 \
+            --query 'data.id' --raw-output)"
+          [[ "$candidate_id" =~ ^ocid1\.instance\. ]] || { echo 'ERROR=WAHA candidate could not be launched'; exit 1; }
+          echo "CANDIDATE_INSTANCE_ID=$candidate_id"
+
+          cleanup_candidate() {
+            rc=$?
+            trap - ERR
+            echo "CANDIDATE_FAILURE_CODE=$rc"
+            oci compute instance terminate --instance-id "$candidate_id" --force --preserve-boot-volume false >/dev/null 2>&1 || true
+            exit "$rc"
+          }
+          trap cleanup_candidate ERR
+
+          candidate_vnic=''
+          candidate_ip=''
+          for attempt in $(seq 1 60); do
+            candidate_vnic="$(oci compute vnic-attachment list \
+              --compartment-id "$COMPARTMENT_OCID" --instance-id "$candidate_id" --all \
+              --query 'data[?"lifecycle-state"==`ATTACHED`]."vnic-id" | [0]' --raw-output 2>/dev/null || true)"
+            if [[ "$candidate_vnic" =~ ^ocid1\.vnic\. ]]; then
+              candidate_ip="$(oci network vnic get --vnic-id "$candidate_vnic" --query 'data."public-ip"' --raw-output 2>/dev/null || true)"
+              [[ "$candidate_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && break
+            fi
+            sleep 10
+          done
+          [[ "$candidate_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'ERROR=Candidate temporary IP missing'; false; }
+          echo "CANDIDATE_TEMP_IP=$candidate_ip"
+
+          ready=0
+          session_status=UNKNOWN
+          for attempt in $(seq 1 150); do
+            common=(--silent --show-error --connect-timeout 5 --max-time 18 -H "Host: $DOMAIN")
+            health_code="$(curl "${common[@]}" -o /tmp/health.json -w '%{http_code}' "http://$candidate_ip/health" 2>/dev/null || true)"
+            version_code="$(curl "${common[@]}" -H "X-Api-Key: $WAHA_API_KEY" -o /tmp/version.json -w '%{http_code}' "http://$candidate_ip/api/server/version" 2>/dev/null || true)"
+            session_code="$(curl "${common[@]}" -H "X-Api-Key: $WAHA_API_KEY" -o /tmp/session.json -w '%{http_code}' "http://$candidate_ip/api/sessions/nitu-travels" 2>/dev/null || true)"
+            engine="$(jq -r '.engine // "unknown"' /tmp/version.json 2>/dev/null || echo unknown)"
+            session_status="$(jq -r '.status // "UNKNOWN"' /tmp/session.json 2>/dev/null || echo UNKNOWN)"
+            echo "CANDIDATE_VERIFY=$attempt HEALTH=${health_code:-000} VERSION=${version_code:-000} SESSION=${session_code:-000} ENGINE=$engine STATUS=$session_status"
+            if [ "$health_code" = 200 ] && [ "$version_code" = 200 ] && [ "$session_code" = 200 ] && [ "$engine" = NOWEB ]; then
+              case "$session_status" in
+                WORKING|SCAN_QR_CODE|PASSKEY_REQUIRED|PASSKEY_CONFIRMATION_REQUIRED)
+                  ready=1
+                  break
+                  ;;
+              esac
+            fi
+            sleep 10
+          done
+          [ "$ready" -eq 1 ] || { echo 'ERROR=Candidate did not become ready'; false; }
+          echo 'CANDIDATE_VERIFIED=yes'
+
+          reserved_json="$(oci network public-ip get --scope REGION --ip-address "$reserved_ip" --output json)"
+          reserved_id="$(jq -r '.data.id' <<<"$reserved_json")"
+          candidate_private_id="$(oci network private-ip list --vnic-id "$candidate_vnic" --all \
+            --query 'data[?"is-primary"==`true`].id | [0]' --raw-output)"
+          temp_json="$(oci network public-ip get --scope REGION --ip-address "$candidate_ip" --output json)"
+          temp_id="$(jq -r '.data.id' <<<"$temp_json")"
+          [[ "$reserved_id" =~ ^ocid1\.publicip\. ]] || { echo 'ERROR=Reserved public IP object missing'; false; }
+          [[ "$candidate_private_id" =~ ^ocid1\.privateip\. ]] || { echo 'ERROR=Candidate private IP missing'; false; }
+
+          echo 'CUTOVER_BEGIN=yes'
+          oci network public-ip delete --public-ip-id "$temp_id" --force >/dev/null
+          sleep 10
+          oci network public-ip update \
+            --public-ip-id "$reserved_id" \
+            --private-ip-id "$candidate_private_id" \
+            --force >/dev/null
+
+          cutover_ok=0
+          for attempt in $(seq 1 120); do
+            args=(--silent --show-error --connect-timeout 8 --max-time 20 --resolve "$DOMAIN:443:$reserved_ip")
+            health_code="$(curl "${args[@]}" -o /tmp/live-health.json -w '%{http_code}' "https://$DOMAIN/health" 2>/dev/null || true)"
+            version_code="$(curl "${args[@]}" -H "X-Api-Key: $WAHA_API_KEY" -o /tmp/live-version.json -w '%{http_code}' "https://$DOMAIN/api/server/version" 2>/dev/null || true)"
+            session_code="$(curl "${args[@]}" -H "X-Api-Key: $WAHA_API_KEY" -o /tmp/live-session.json -w '%{http_code}' "https://$DOMAIN/api/sessions/nitu-travels" 2>/dev/null || true)"
+            engine="$(jq -r '.engine // "unknown"' /tmp/live-version.json 2>/dev/null || echo unknown)"
+            live_status="$(jq -r '.status // "UNKNOWN"' /tmp/live-session.json 2>/dev/null || echo UNKNOWN)"
+            echo "CUTOVER_VERIFY=$attempt HEALTH=${health_code:-000} VERSION=${version_code:-000} SESSION=${session_code:-000} ENGINE=$engine STATUS=$live_status"
+            if [ "$health_code" = 200 ] && [ "$version_code" = 200 ] && [ "$session_code" = 200 ] && [ "$engine" = NOWEB ]; then
+              case "$live_status" in
+                WORKING|SCAN_QR_CODE|PASSKEY_REQUIRED|PASSKEY_CONFIRMATION_REQUIRED)
+                  cutover_ok=1
+                  session_status="$live_status"
+                  break
+                  ;;
+              esac
+            fi
+            sleep 10
+          done
+
+          if [ "$cutover_ok" -ne 1 ]; then
+            echo 'CUTOVER_ROLLBACK=yes'
+            oci network public-ip update \
+              --public-ip-id "$reserved_id" \
+              --private-ip-id "$old_private_id" \
+              --force >/dev/null || true
+            echo 'ERROR=Cutover verification failed; reserved IP restored to previous VM'
+            false
+          fi
+
+          trap - ERR
+          oci compute instance action --instance-id "$old_id" --action SOFTSTOP >/dev/null || true
+          echo 'OLD_GATEWAY_SOFTSTOP_REQUESTED=yes'
+          echo "FINAL_INSTANCE_ID=$candidate_id"
+          echo "FINAL_PUBLIC_IP=$reserved_ip"
+          echo 'FINAL_ENGINE=NOWEB'
+          echo "FINAL_SESSION_STATUS=$session_status"
+          echo 'INSTALL_RESULT=success'
+          echo "FINISHED_AT=$(date -u +%FT%TZ)"
+          echo 'FINAL_BLUEGREEN_WAHA_END'
