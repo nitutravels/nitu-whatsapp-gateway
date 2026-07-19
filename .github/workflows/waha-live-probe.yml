@@ -1,83 +1,27 @@
 name: Probe WAHA production
-
 on:
   pull_request:
     branches: [main]
-
-permissions:
-  contents: read
-  packages: read
-
+permissions: {contents: read, packages: read}
 jobs:
   probe:
     runs-on: ubuntu-latest
     environment: production
     timeout-minutes: 15
     steps:
-      - name: Configure OCI and probe production
-        shell: bash
+      - name: Probe
         env:
-          OCI_PRIVATE_KEY_PEM: ${{ secrets.OCI_PRIVATE_KEY }}
-          OCI_FINGERPRINT_VALUE: ${{ secrets.OCI_FINGERPRINT }}
-          OCI_USER_OCID: ${{ secrets.OCI_USER_OCID }}
-          OCI_TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
-          OCI_REGION: ${{ vars.OCI_REGION }}
-          COMPARTMENT_OCID: ${{ vars.OCI_COMPARTMENT_OCID }}
+          KEY: ${{ secrets.OCI_PRIVATE_KEY }}
+          FP: ${{ secrets.OCI_FINGERPRINT }}
+          USER: ${{ secrets.OCI_USER_OCID }}
+          TENANCY: ${{ secrets.OCI_TENANCY_OCID }}
+          REGION: ${{ vars.OCI_REGION }}
+          COMP: ${{ vars.OCI_COMPARTMENT_OCID }}
           DOMAIN: ${{ vars.GATEWAY_DOMAIN || 'wa.nitutravels.in' }}
-          API_KEY: ${{ secrets.GATEWAY_API_KEY }}
+          API: ${{ secrets.GATEWAY_API_KEY }}
         run: |
-          set -u
-          mkdir -p "$HOME/.oci"
-          python - <<'PY'
-          import os
-          from pathlib import Path
-          value = os.environ.get('OCI_PRIVATE_KEY_PEM', '').strip()
-          if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
-              value = value[1:-1]
-          if '\\n' in value and '\n' not in value:
-              value = value.replace('\\r', '').replace('\\n', '\n')
-          Path.home().joinpath('.oci/key.pem').write_text(value.replace('\r', '').strip() + '\n')
-          PY
-          chmod 600 "$HOME/.oci/key.pem"
-          fingerprint="$(printf '%s' "$OCI_FINGERPRINT_VALUE" | tr -d '[:space:]')"
-          cat > "$HOME/.oci/config" <<EOF
-          [DEFAULT]
-          user=$OCI_USER_OCID
-          fingerprint=$fingerprint
-          tenancy=$OCI_TENANCY_OCID
-          region=$OCI_REGION
-          key_file=$HOME/.oci/key.pem
-          EOF
-          chmod 600 "$HOME/.oci/config"
-          pipx install --quiet oci-cli >/dev/null 2>&1
-
-          result=0
-          instance_id="$(oci compute instance list --compartment-id "$COMPARTMENT_OCID" --display-name nitu-whatsapp-gateway --all --query 'data[?"lifecycle-state"!=`TERMINATED`].id | [0]' --raw-output 2>/dev/null || true)"
-          if [[ ! "$instance_id" =~ ^ocid1\.instance\. ]]; then
-            echo 'PROBE_ERROR=instance_not_found'
-            exit 0
-          fi
-          lifecycle="$(oci compute instance get --instance-id "$instance_id" --query 'data."lifecycle-state"' --raw-output 2>/dev/null || echo unknown)"
-          vnic_id="$(oci compute vnic-attachment list --compartment-id "$COMPARTMENT_OCID" --instance-id "$instance_id" --all --query 'data[?"lifecycle-state"==`ATTACHED`]."vnic-id" | [0]' --raw-output 2>/dev/null || true)"
-          public_ip="$(oci network vnic get --vnic-id "$vnic_id" --query 'data."public-ip"' --raw-output 2>/dev/null || true)"
-          image_b64="$(oci compute instance get --instance-id "$instance_id" --query 'data.metadata.gateway_env_b64' --raw-output 2>/dev/null || true)"
-          image="$(printf '%s' "$image_b64" | base64 --decode 2>/dev/null | sed -n 's/^GATEWAY_IMAGE=//p' | head -1)"
-          echo "INSTANCE_LIFECYCLE=$lifecycle"
-          echo "PUBLIC_IP=$public_ip"
-          echo "PINNED_IMAGE=$image"
-
-          if [[ "$public_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            curl_base=(--silent --show-error --connect-timeout 8 --max-time 20 --resolve "$DOMAIN:443:$public_ip")
-            health_code="$(curl "${curl_base[@]}" -o /tmp/health.json -w '%{http_code}' "https://$DOMAIN/health" 2>/tmp/health.err || true)"
-            session_code="$(curl "${curl_base[@]}" -H "X-Api-Key: $API_KEY" -o /tmp/session.json -w '%{http_code}' "https://$DOMAIN/api/sessions/nitu-travels" 2>/tmp/session.err || true)"
-          else
-            health_code=000
-            session_code=000
-          fi
-          echo "HEALTH_HTTP=${health_code:-000}"
-          echo "SESSION_HTTP=${session_code:-000}"
-          if [ -s /tmp/health.err ]; then echo -n 'HEALTH_ERROR='; head -c 240 /tmp/health.err; echo; fi
-          if [ -s /tmp/session.err ]; then echo -n 'SESSION_ERROR='; head -c 240 /tmp/session.err; echo; fi
-          if [ -s /tmp/health.json ]; then echo -n 'HEALTH_BODY='; jq -c '{status:.status,services:.services}' /tmp/health.json 2>/dev/null || head -c 300 /tmp/health.json; echo; fi
-          if [ -s /tmp/session.json ]; then echo -n 'SESSION_BODY='; jq -c '{name,status,engine:(.engine.engine // .engine.name // null),me:(if .me then {id:.me.id,pushName:.me.pushName} else null end)}' /tmp/session.json 2>/dev/null || head -c 500 /tmp/session.json; echo; fi
-          echo 'PROBE_COMPLETE=yes'
+          mkdir -p ~/.oci; python -c 'import os,pathlib;v=os.environ["KEY"].strip().strip("\"'\''").replace("\\r","").replace("\\n","\n");pathlib.Path.home().joinpath(".oci/key.pem").write_text(v.strip()+"\n")'; chmod 600 ~/.oci/key.pem
+          printf '[DEFAULT]\nuser=%s\nfingerprint=%s\ntenancy=%s\nregion=%s\nkey_file=%s/.oci/key.pem\n' "$USER" "$(echo "$FP"|tr -d '[:space:]')" "$TENANCY" "$REGION" "$HOME" > ~/.oci/config; chmod 600 ~/.oci/config; pipx install --quiet oci-cli >/dev/null 2>&1
+          I=$(oci compute instance list --compartment-id "$COMP" --display-name nitu-whatsapp-gateway --all --query 'data[?"lifecycle-state"!=`TERMINATED`].id|[0]' --raw-output); L=$(oci compute instance get --instance-id "$I" --query 'data."lifecycle-state"' --raw-output); V=$(oci compute vnic-attachment list --compartment-id "$COMP" --instance-id "$I" --all --query 'data[?"lifecycle-state"==`ATTACHED`]."vnic-id"|[0]' --raw-output); P=$(oci network vnic get --vnic-id "$V" --query 'data."public-ip"' --raw-output)
+          B=$(oci compute instance get --instance-id "$I" --query 'data.metadata.gateway_env_b64' --raw-output); IMG=$(printf %s "$B"|base64 -d 2>/dev/null|sed -n 's/^GATEWAY_IMAGE=//p'|head -1); echo "INSTANCE=$L IP=$P IMAGE=$IMG"
+          C=(--silent --show-error --connect-timeout 8 --max-time 20 --resolve "$DOMAIN:443:$P"); H=$(curl "${C[@]}" -o /tmp/h -w '%{http_code}' "https://$DOMAIN/health" 2>/tmp/he||true); S=$(curl "${C[@]}" -H "X-Api-Key: $API" -o /tmp/s -w '%{http_code}' "https://$DOMAIN/api/sessions/nitu-travels" 2>/tmp/se||true); echo "HEALTH=$H SESSION=$S"; [ -s /tmp/he ]&&{ echo -n 'HEALTH_ERROR=';cat /tmp/he;}; [ -s /tmp/se ]&&{ echo -n 'SESSION_ERROR=';cat /tmp/se;}; [ -s /tmp/h ]&&{ echo -n ' HEALTH_BODY=';jq -c '{status,services}' /tmp/h 2>/dev/null||head -c 300 /tmp/h;}; [ -s /tmp/s ]&&{ echo -n ' SESSION_BODY=';jq -c '{name,status,engine:(.engine.engine//.engine.name),me:(if .me then {id:.me.id,pushName:.me.pushName} else null end)}' /tmp/s 2>/dev/null||head -c 500 /tmp/s;}; echo
