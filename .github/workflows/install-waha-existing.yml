@@ -1,4 +1,4 @@
-name: Deploy fixed WAHA image to existing Oracle VM
+name: Deploy verified WAHA image to existing Oracle VM
 
 on:
   workflow_dispatch:
@@ -9,6 +9,7 @@ on:
       - 'Dockerfile'
       - 'docker/waha-entrypoint.sh'
       - 'docker/nitu-waha-supervisor.mjs'
+      - 'scripts/deploy-waha.sh'
       - 'waha-oracle/METADATA-DEPLOY'
 
 permissions:
@@ -17,26 +18,31 @@ permissions:
 
 concurrency:
   group: nitu-waha-existing-vm-install
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     environment: production
-    timeout-minutes: 50
+    timeout-minutes: 55
     steps:
       - uses: actions/checkout@v7
+
       - uses: docker/setup-buildx-action@v4
+
       - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Define immutable image
         id: image
         shell: bash
         run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
-      - uses: docker/build-push-action@v7
+
+      - name: Build and publish x86-64 WAHA wrapper
+        uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/amd64
@@ -46,6 +52,49 @@ jobs:
             ghcr.io/${{ github.repository }}:waha-production
           provenance: mode=max
           sbom: true
+
+      - name: Verify public pull and smoke-test NOWEB
+        shell: bash
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+        run: |
+          set -Eeuo pipefail
+          docker logout ghcr.io >/dev/null 2>&1 || true
+          docker image rm "$IMAGE" >/dev/null 2>&1 || true
+          docker pull "$IMAGE"
+          test "$(docker image inspect "$IMAGE" --format '{{.Architecture}}')" = amd64
+
+          api_key='0000000000000000000000000000000000000000'
+          admin_token='1111111111111111111111111111111111111111'
+          mkdir -p /tmp/waha-smoke-data
+          docker run -d --rm --name nitu-waha-smoke \
+            -p 127.0.0.1:3300:3000 \
+            -e API_KEY="$api_key" \
+            -e ADMIN_TOKEN="$admin_token" \
+            -e PUBLIC_BASE_URL='http://127.0.0.1:3300' \
+            -e WEBHOOK_URL='' \
+            -e WEBHOOK_SECRET="$api_key" \
+            -e LOG_LEVEL=warn \
+            -v /tmp/waha-smoke-data:/data \
+            "$IMAGE"
+          trap 'docker logs nitu-waha-smoke 2>&1 | tail -n 200 || true; docker stop nitu-waha-smoke >/dev/null 2>&1 || true' EXIT
+
+          ready=0
+          for attempt in $(seq 1 90); do
+            health_code="$(curl -sS --connect-timeout 3 --max-time 8 -o /tmp/health.json -w '%{http_code}' http://127.0.0.1:3300/health 2>/dev/null || true)"
+            version_code="$(curl -sS --connect-timeout 3 --max-time 8 -H "X-Api-Key: $api_key" -o /tmp/version.json -w '%{http_code}' http://127.0.0.1:3300/api/server/version 2>/dev/null || true)"
+            engine="$(jq -r '.engine // "unknown"' /tmp/version.json 2>/dev/null || echo unknown)"
+            echo "SMOKE_ATTEMPT=$attempt HEALTH=${health_code:-000} VERSION=${version_code:-000} ENGINE=$engine"
+            if [ "$health_code" = 200 ] && [ "$version_code" = 200 ] && [ "$engine" = NOWEB ]; then
+              ready=1
+              break
+            fi
+            sleep 5
+          done
+          [ "$ready" -eq 1 ]
+          docker stop nitu-waha-smoke >/dev/null
+          trap - EXIT
+          echo 'SMOKE_RESULT=success'
 
       - name: Configure OCI credentials
         shell: bash
@@ -59,8 +108,10 @@ jobs:
           import os
           from pathlib import Path
           value=os.environ.get('OCI_PRIVATE_KEY_PEM','').strip()
-          if len(value)>=2 and value[0]==value[-1] and value[0] in {'"',"'"}: value=value[1:-1]
-          if '\\n' in value and '\n' not in value: value=value.replace('\\r','').replace('\\n','\n')
+          if len(value)>=2 and value[0]==value[-1] and value[0] in {'"',"'"}:
+              value=value[1:-1]
+          if '\\n' in value and '\n' not in value:
+              value=value.replace('\\r','').replace('\\n','\n')
           Path.home().joinpath('.oci/key.pem').write_text(value.replace('\r','').strip()+'\n')
           PY
           chmod 600 "$HOME/.oci/key.pem"
@@ -76,10 +127,29 @@ jobs:
           pipx install --quiet oci-cli
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      - name: Pin corrected WAHA image and verify live service
+      - name: Resolve Oracle compartment
+        id: oci
         shell: bash
         env:
-          COMPARTMENT_OCID: ${{ vars.OCI_COMPARTMENT_OCID }}
+          TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
+          CONFIGURED_COMPARTMENT_OCID: ${{ vars.OCI_COMPARTMENT_OCID }}
+        run: |
+          set -Eeuo pipefail
+          compartment="$CONFIGURED_COMPARTMENT_OCID"
+          if [[ ! "$compartment" =~ ^ocid1\.compartment\. ]]; then
+            compartment="$(oci iam compartment list \
+              --compartment-id "$TENANCY_OCID" \
+              --compartment-id-in-subtree true \
+              --access-level ANY --all --output json | \
+              jq -r '[.data[] | select(.name=="NituWAGateway" and .["lifecycle-state"]=="ACTIVE") | .id][0] // empty')"
+          fi
+          [[ "$compartment" =~ ^ocid1\.compartment\. ]]
+          echo "compartment=$compartment" >> "$GITHUB_OUTPUT"
+
+      - name: Pin verified image through OCI metadata and verify live service
+        shell: bash
+        env:
+          COMPARTMENT_OCID: ${{ steps.oci.outputs.compartment }}
           DOMAIN: ${{ vars.GATEWAY_DOMAIN || 'wa.nitutravels.in' }}
           API_KEY: ${{ secrets.GATEWAY_API_KEY }}
           IMAGE: ${{ steps.image.outputs.name }}
@@ -100,5 +170,8 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add docs/waha-metadata-deploy-result.txt
           git diff --cached --quiet || git commit -m 'Record WAHA metadata deployment result'
-          git pull --rebase origin main
-          git push origin HEAD:main
+          for attempt in 1 2 3 4 5; do
+            git pull --rebase origin main && git push origin HEAD:main && exit 0
+            sleep $((attempt * 5))
+          done
+          exit 1
