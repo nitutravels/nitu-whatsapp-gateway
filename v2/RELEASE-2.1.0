@@ -1,0 +1,8 @@
+Nitu Travels Baileys Gateway v2.1.0
+
+Website integration changes:
+- Oracle minute worker authenticates to whatsapp-gateway-worker.php with x-api-key.
+- Delivery callbacks include x-api-key in addition to the existing HMAC signature.
+- Bounded POST /api/v1/messages/statuses accepts up to 100 UUIDs for repair synchronization.
+
+Companion website release: Manage Nitu Travels v15.10.
