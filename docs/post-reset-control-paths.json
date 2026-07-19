@@ -1,0 +1,67 @@
+{
+  "agent_config": {
+    "are_all_plugins_disabled": false,
+    "is_management_disabled": false,
+    "is_monitoring_disabled": false,
+    "plugins_config": [
+      {
+        "desired_state": "ENABLED",
+        "name": "Compute Instance Run Command"
+      },
+      {
+        "desired_state": "ENABLED",
+        "name": "Bastion"
+      }
+    ]
+  },
+  "instance_id": "ocid1.instance.oc1.ap-mumbai-1.anrg6ljr724yghqc4d6hgbco7f5bbllsi6wfqjxlgust5idcqcrcouf2kmoq",
+  "lifecycle_state": "RUNNING",
+  "pinned_image": "ghcr.io/nitutravels/nitu-whatsapp-gateway:recovery-29694728675",
+  "plugins": [
+    {
+      "name": "Custom Logs Monitoring",
+      "status": "NOT_SUPPORTED"
+    },
+    {
+      "name": "Cloud Guard Workload Protection",
+      "status": "RUNNING"
+    },
+    {
+      "name": "Vulnerability Scanning",
+      "status": "STOPPED"
+    },
+    {
+      "name": "Compute HPC RDMA Authentication",
+      "status": "NOT_SUPPORTED"
+    },
+    {
+      "name": "OS Management Hub Agent",
+      "status": "STOPPED"
+    },
+    {
+      "name": "Management Agent",
+      "status": "STOPPED"
+    },
+    {
+      "name": "Compute RDMA GPU Monitoring",
+      "status": "NOT_SUPPORTED"
+    },
+    {
+      "name": "Compute HPC RDMA Auto-Configuration",
+      "status": "NOT_SUPPORTED"
+    },
+    {
+      "name": "Block Volume Management",
+      "status": "STOPPED"
+    },
+    {
+      "name": "Compute Instance Monitoring",
+      "status": "RUNNING"
+    },
+    {
+      "name": "Bastion",
+      "status": "RUNNING"
+    }
+  ],
+  "shape": "VM.Standard.E2.1.Micro"
+}
