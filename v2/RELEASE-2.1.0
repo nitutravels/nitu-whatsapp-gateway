@@ -1,4 +1,4 @@
-Nitu Travels Baileys Gateway v2.1.0
+Nitu Travels Baileys Gateway v2.1.1
 
 Website integration changes:
 - Oracle minute worker authenticates to whatsapp-gateway-worker.php with x-api-key.
@@ -11,5 +11,11 @@ Cutover safety:
 - Individual queued/retry rows may be cancelled before transmission.
 - All queued/retry rows may be cancelled in one guarded action.
 - Pairing WhatsApp does not release stale messages until delivery is resumed.
+
+Authentication reconciliation repair:
+- Partial creds.update payloads are merged into the encrypted SQLite credentials row before persistence.
+- Readiness uses the live socket auth state instead of a stale pre-socket credentials copy.
+- Account identity falls back to the authenticated credential identity when socket.user is not populated yet.
+- This repairs the contradictory state where WhatsApp lists the device as active but the gateway displays open/unregistered.
 
 Companion website release: Manage Nitu Travels v15.10.
