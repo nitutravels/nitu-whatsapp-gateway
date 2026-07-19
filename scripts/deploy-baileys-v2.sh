@@ -37,6 +37,54 @@ fi
 echo "INSTANCE_ID=$instance_id"
 
 oci compute instance get --instance-id "$instance_id" --output json > /tmp/instance.json
+lifecycle="$(jq -r '.data."lifecycle-state" // empty' /tmp/instance.json)"
+echo "INITIAL_LIFECYCLE=$lifecycle"
+
+case "$lifecycle" in
+  STOPPED)
+    oci compute instance action --instance-id "$instance_id" --action START >/dev/null
+    echo 'START_REQUESTED=yes'
+    ;;
+  STOPPING)
+    for attempt in $(seq 1 60); do
+      lifecycle="$(oci compute instance get --instance-id "$instance_id" --query 'data."lifecycle-state"' --raw-output)"
+      echo "STOP_WAIT_ATTEMPT=$attempt STATE=$lifecycle"
+      [ "$lifecycle" = STOPPED ] && break
+      sleep 10
+    done
+    [ "$lifecycle" = STOPPED ] || { echo 'DEPLOY_RESULT=failed'; echo 'ERROR=Instance did not finish stopping.'; exit 14; }
+    oci compute instance action --instance-id "$instance_id" --action START >/dev/null
+    echo 'START_REQUESTED=yes'
+    ;;
+  RUNNING|STARTING)
+    echo 'REBOOT_SKIPPED=yes'
+    ;;
+  *)
+    echo 'DEPLOY_RESULT=failed'
+    echo "ERROR=Unsupported instance lifecycle state: $lifecycle"
+    exit 14
+    ;;
+esac
+
+stable=0
+for attempt in $(seq 1 100); do
+  lifecycle="$(oci compute instance get --instance-id "$instance_id" --query 'data."lifecycle-state"' --raw-output)"
+  echo "POWER_ATTEMPT=$attempt STATE=$lifecycle"
+  if [ "$lifecycle" = RUNNING ]; then
+    stable=$((stable + 1))
+    [ "$stable" -ge 3 ] && break
+  else
+    stable=0
+  fi
+  sleep 10
+done
+if [ "$stable" -lt 3 ]; then
+  echo 'DEPLOY_RESULT=failed'
+  echo 'ERROR=Instance did not reach a stable RUNNING state.'
+  exit 14
+fi
+
+oci compute instance get --instance-id "$instance_id" --output json > /tmp/instance.json
 vnic_id="$(oci compute vnic-attachment list \
   --compartment-id "$COMPARTMENT_OCID" \
   --instance-id "$instance_id" --all \
@@ -46,7 +94,12 @@ public_ip=''
 if [[ "$vnic_id" =~ ^ocid1\.vnic\. ]]; then
   public_ip="$(oci network vnic get --vnic-id "$vnic_id" --query 'data."public-ip"' --raw-output)"
 fi
-echo "PUBLIC_IP=${public_ip:-unresolved}"
+if [[ ! "$public_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo 'DEPLOY_RESULT=failed'
+  echo 'ERROR=Gateway VNIC has no usable public IPv4 address.'
+  exit 15
+fi
+echo "PUBLIC_IP=$public_ip"
 
 current_env_b64="$(jq -r '.data.metadata.gateway_env_b64 // empty' /tmp/instance.json)"
 if [ -z "$current_env_b64" ]; then
@@ -66,6 +119,7 @@ jq --arg updated "$updated_env_b64" '.data.metadata | .gateway_env_b64=$updated'
   /tmp/instance.json > /tmp/metadata.json
 oci compute instance update --instance-id "$instance_id" --metadata file:///tmp/metadata.json --force >/dev/null
 echo 'METADATA_IMAGE_PINNED=yes'
+echo 'ROLLOUT_MODE=systemd_metadata_sync_no_reboot'
 
 cat > /tmp/agent-config.json <<'JSON'
 {
@@ -77,36 +131,12 @@ cat > /tmp/agent-config.json <<'JSON'
 JSON
 oci compute instance update --instance-id "$instance_id" --agent-config file:///tmp/agent-config.json --force >/dev/null || true
 
-oci compute instance action --instance-id "$instance_id" --action SOFTRESET >/dev/null
-echo 'SOFT_RESET_REQUESTED=yes'
-sleep 30
-stable=0
-for attempt in $(seq 1 100); do
-  lifecycle="$(oci compute instance get --instance-id "$instance_id" --query 'data."lifecycle-state"' --raw-output)"
-  echo "POWER_ATTEMPT=$attempt STATE=$lifecycle"
-  if [ "$lifecycle" = RUNNING ]; then
-    stable=$((stable + 1))
-    [ "$stable" -ge 3 ] && break
-  else
-    stable=0
-  fi
-  sleep 10
-done
-if [ "$stable" -lt 3 ]; then
-  echo 'DEPLOY_RESULT=failed'
-  echo 'ERROR=Instance did not return to stable RUNNING state.'
-  exit 14
-fi
-
 health_ok=0
 state_ok=0
 final_status='{}'
-for attempt in $(seq 1 120); do
+for attempt in $(seq 1 150); do
   rm -f /tmp/health.json /tmp/status.json
-  curl_args=(--silent --show-error --connect-timeout 8 --max-time 20)
-  if [[ "$public_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    curl_args+=(--resolve "$DOMAIN:443:$public_ip")
-  fi
+  curl_args=(--silent --show-error --connect-timeout 8 --max-time 20 --resolve "$DOMAIN:443:$public_ip")
   health_code="$(curl "${curl_args[@]}" -o /tmp/health.json -w '%{http_code}' "https://$DOMAIN/healthz" || true)"
   status_code="$(curl "${curl_args[@]}" -H "Authorization: Bearer $ADMIN_TOKEN" \
     -o /tmp/status.json -w '%{http_code}' "https://$DOMAIN/admin/api/status" || true)"
@@ -114,9 +144,10 @@ for attempt in $(seq 1 120); do
   phase="$(jq -r '.phase // "unknown"' /tmp/status.json 2>/dev/null || echo unknown)"
   engine="$(jq -r '.engine // "unknown"' /tmp/status.json 2>/dev/null || echo unknown)"
   ready="$(jq -r '.ready // false' /tmp/status.json 2>/dev/null || echo false)"
+  registered="$(jq -r '.registered // false' /tmp/status.json 2>/dev/null || echo false)"
   has_qr="$(jq -r '((.qrDataUrl // "") | length) > 20' /tmp/status.json 2>/dev/null || echo false)"
   has_code="$(jq -r '((.pairingCode // "") | length) >= 8' /tmp/status.json 2>/dev/null || echo false)"
-  echo "VERIFY_ATTEMPT=$attempt HEALTH_HTTP=${health_code:-000} STATUS_HTTP=${status_code:-000} ENGINE=$engine STATUS=$status PHASE=$phase READY=$ready HAS_QR=$has_qr HAS_CODE=$has_code"
+  echo "VERIFY_ATTEMPT=$attempt HEALTH_HTTP=${health_code:-000} STATUS_HTTP=${status_code:-000} ENGINE=$engine STATUS=$status PHASE=$phase READY=$ready REGISTERED=$registered HAS_QR=$has_qr HAS_CODE=$has_code"
 
   [ "$health_code" = 200 ] && health_ok=1
   if [ "$status_code" = 200 ] && [ -s /tmp/status.json ]; then
@@ -140,9 +171,9 @@ fi
 
 echo 'DEPLOY_RESULT=failed'
 if [ "$health_ok" -ne 1 ]; then
-  echo 'ERROR=Gateway health endpoint did not recover.'
+  echo 'ERROR=Gateway health endpoint did not recover through the current public IP.'
 else
-  echo 'ERROR=Baileys v2 is online but neither ready nor presenting a usable pairing state.'
+  echo 'ERROR=Gateway is online but neither ready nor presenting a usable pairing state.'
 fi
 echo 'BAILEYS_V2_DEPLOY_END'
-exit 15
+exit 16
