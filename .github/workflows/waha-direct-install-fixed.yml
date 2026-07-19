@@ -1,0 +1,86 @@
+name: Direct official WAHA Oracle install fixed
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/waha-direct-install-fixed.yml'
+      - 'scripts/deploy-waha-direct.sh'
+      - 'deploy/WAHA_DIRECT_INSTALL_FIXED'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nitu-waha-direct-install-fixed
+  cancel-in-progress: false
+
+jobs:
+  install:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Configure OCI credentials
+        shell: bash
+        env:
+          OCI_PRIVATE_KEY_PEM: ${{ secrets.OCI_PRIVATE_KEY }}
+          OCI_FINGERPRINT_VALUE: ${{ secrets.OCI_FINGERPRINT }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$HOME/.oci"
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          value = os.environ.get('OCI_PRIVATE_KEY_PEM', '').strip()
+          if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+              value = value[1:-1]
+          if '\\n' in value and '\n' not in value:
+              value = value.replace('\\r', '').replace('\\n', '\n')
+          Path.home().joinpath('.oci/key.pem').write_text(value.replace('\r', '').strip() + '\n', encoding='utf-8')
+          PY
+          chmod 600 "$HOME/.oci/key.pem"
+          fingerprint="$(printf '%s' "$OCI_FINGERPRINT_VALUE" | tr -d '[:space:]')"
+          cat > "$HOME/.oci/config" <<EOF
+          [DEFAULT]
+          user=${{ secrets.OCI_USER_OCID }}
+          fingerprint=$fingerprint
+          tenancy=${{ secrets.OCI_TENANCY_OCID }}
+          region=${{ vars.OCI_REGION }}
+          key_file=$HOME/.oci/key.pem
+          EOF
+          chmod 600 "$HOME/.oci/config"
+
+      - name: Install OCI CLI
+        run: pipx install --quiet oci-cli
+
+      - name: Deploy official WAHA NOWEB ARM64 without VM reboot
+        shell: bash
+        env:
+          COMPARTMENT_OCID: ${{ vars.OCI_COMPARTMENT_OCID }}
+          DOMAIN: ${{ vars.GATEWAY_DOMAIN || 'wa.nitutravels.in' }}
+          API_KEY: ${{ secrets.GATEWAY_API_KEY }}
+          WAHA_IMAGE: devlikeapro/waha:noweb-arm-2026.7.1
+          SESSION_NAME: nitu-travels
+        run: |
+          chmod 0755 scripts/deploy-waha-direct.sh
+          scripts/deploy-waha-direct.sh
+
+      - name: Persist deployment result
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -f docs/waha-direct-install-result.txt || echo 'Direct WAHA installation did not reach the deployment script.' > docs/waha-direct-install-result.txt
+          git config user.name 'github-actions[bot]'
+          git config user.email '4189826+github-actions[bot]@users.noreply.github.com'
+          git add docs/waha-direct-install-result.txt
+          git diff --cached --quiet || git commit -m 'Record fixed direct WAHA Oracle installation result'
+          for attempt in 1 2 3 4 5; do
+            git pull --rebase origin main && git push origin HEAD:main && exit 0
+            sleep $((attempt * 5))
+          done
+          exit 1
