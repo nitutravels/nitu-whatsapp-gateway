@@ -5,6 +5,7 @@ LABEL org.opencontainers.image.source="https://github.com/nitutravels/nitu-whats
       org.opencontainers.image.licenses="Apache-2.0"
 
 COPY --chmod=0755 docker/waha-entrypoint.sh /usr/local/bin/nitu-waha-entrypoint
+COPY docker/nitu-waha-supervisor.mjs /usr/local/lib/nitu-waha-supervisor.mjs
 
 EXPOSE 3000
 
