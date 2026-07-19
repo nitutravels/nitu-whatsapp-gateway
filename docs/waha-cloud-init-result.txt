@@ -1,0 +1,28 @@
+WAHA_CLOUD_INIT_INSTALL_BEGIN
+STARTED_AT=2026-07-19T12:50:32Z
+INSTANCE_ID=ocid1.instance.oc1.ap-mumbai-1.anrg6ljr724yghqc4d6hgbco7f5bbllsi6wfqjxlgust5idcqcrcouf2kmoq
+INSTANCE_SHAPE=VM.Standard.E2.1.Micro
+PUBLIC_IP=137.23.58.166
+UNSUCCESSFUL_BOOT_VOLUME=ocid1.bootvolume.oc1.ap-mumbai-1.abrg6ljr2jrq3fofkpzmle2repa54wypgykt3y3oyulb45cjg3pyjp3yrifa
+PRESERVED_ROLLBACK_BOOT_VOLUME=ocid1.bootvolume.oc1.ap-mumbai-1.abrg6ljrkoazxrkea4slxzw55oqmtfdsncly3c7odpf633wd2tzhdvw67fwq
+STOPPING_FRESH_OS=yes
+Action completed. Waiting until the resource has entered state: ('STOPPED',)
+ServiceError:
+{
+    "client_version": "Oracle-PythonSDK/2.182.0, Oracle-PythonCLI/3.89.2",
+    "code": "InvalidParameter",
+    "logging_tips": "Please run the OCI CLI command using --debug flag to find more debug information.",
+    "message": "The 'user_data' metadata field cannot be updated and must be provided with the already existing value.",
+    "opc-request-id": "BD542613822144599E0C5D87CA1C1909/4678F0988832183C28C85C6A424F4DC7/5FA24B1760DB0AA4F1968D93F28CB8D6",
+    "operation_name": "update_instance",
+    "request_endpoint": "PUT https://iaas.ap-mumbai-1.oraclecloud.com/20160918/instances/ocid1.instance.oc1.ap-mumbai-1.anrg6ljr724yghqc4d6hgbco7f5bbllsi6wfqjxlgust5idcqcrcouf2kmoq",
+    "status": 400,
+    "target_service": "compute",
+    "timestamp": "2026-07-19T12:50:48.855461+00:00",
+    "troubleshooting_tips": "See [https://docs.oracle.com/iaas/Content/API/References/apierrors.htm] for more information about resolving this error. If you are unable to resolve this issue, run this CLI command with --debug option and contact Oracle support and provide them the full error message."
+}
+INSTALL_FAILURE_CODE=1
+ROLLBACK_RESULT=not_required
+INSTALL_RESULT=failed
+FINISHED_AT=2026-07-19T12:50:48Z
+WAHA_CLOUD_INIT_INSTALL_END
