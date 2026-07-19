@@ -1,0 +1,86 @@
+name: Complete WAHA installation with OCI MCP soft reset
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: write
+concurrency:
+  group: waha-official-mcp-softreset
+  cancel-in-progress: true
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+      - name: Controlled Oracle soft reset through official OCI MCP
+        shell: bash
+        env:
+          KEY: ${{ secrets.OCI_PRIVATE_KEY }}
+          FP: ${{ secrets.OCI_FINGERPRINT }}
+          USER_OCID: ${{ secrets.OCI_USER_OCID }}
+          TENANCY: ${{ secrets.OCI_TENANCY_OCID }}
+          REGION: ${{ vars.OCI_REGION }}
+          COMP: ${{ vars.OCI_COMPARTMENT_OCID }}
+          OCI_CONFIG_PROFILE: DEFAULT
+          FASTMCP_LOG_LEVEL: ERROR
+        run: |
+          set -Eeuo pipefail;mkdir -p ~/.oci docs
+          python -c 'import os,pathlib;v=os.environ["KEY"].strip().strip("\"\047").replace("\\r","").replace("\\n","\n");pathlib.Path.home().joinpath(".oci/key.pem").write_text(v.strip()+"\n")';chmod 600 ~/.oci/key.pem
+          printf '[DEFAULT]\nuser=%s\nfingerprint=%s\ntenancy=%s\nregion=%s\nkey_file=%s/.oci/key.pem\n' "$USER_OCID" "$(echo "$FP"|tr -d '[:space:]')" "$TENANCY" "$REGION" "$HOME" > ~/.oci/config;chmod 600 ~/.oci/config;pipx install --quiet uv
+          uv run --with 'mcp>=1.0' python - <<'PY'
+          import asyncio,base64,json,os,time
+          from mcp import ClientSession,StdioServerParameters
+          from mcp.client.stdio import stdio_client
+          def dec(r):
+            t=''.join(getattr(x,'text','') for x in r.content);a=t.find('{');b=t.rfind('}');return json.loads(t[a:b+1])
+          async def inv(s,c,o,p,f=None,m=None):
+            a={'client_fqn':c,'operation':o,'params':p,'result_mode':'full'}
+            if f:a['fields']=f
+            if m:a['max_results']=m
+            r=await s.call_tool('invoke_oci_api',a)
+            if getattr(r,'isError',False):raise RuntimeError(''.join(getattr(x,'text','') for x in r.content))
+            return dec(r)
+          def it(x):
+            d=x.get('data',[]);return d.get('items',d.get('results',[])) if isinstance(d,dict) else d
+          async def main():
+            comp=os.environ['COMP'];sv=StdioServerParameters(command='uvx',args=['oracle.oci-cloud-mcp-server@latest'],env={**os.environ,'OCI_CONFIG_PROFILE':'DEFAULT','FASTMCP_LOG_LEVEL':'ERROR'})
+            async with stdio_client(sv) as (r,w):
+              async with ClientSession(r,w) as s:
+                await s.initialize();ls=await inv(s,'oci.core.ComputeClient','list_instances',{'compartment_id':comp},['id','display_name','lifecycle_state'],20);t=next(x for x in it(ls) if x.get('display_name')=='nitu-whatsapp-gateway' and x.get('lifecycle_state')!='TERMINATED');iid=t['id']
+                g=await inv(s,'oci.core.ComputeClient','get_instance',{'instance_id':iid},['lifecycle_state','metadata']);x=g.get('data') or {};env=base64.b64decode((x.get('metadata') or {}).get('gateway_env_b64','')).decode();image=next((q.split('=',1)[1] for q in env.splitlines() if q.startswith('GATEWAY_IMAGE=')),None)
+                if not image or 'official-mcp-waha-20260719' not in image:raise RuntimeError('Refusing reset: expected ARM64 WAHA image is not pinned')
+                await inv(s,'oci.core.ComputeClient','instance_action',{'instance_id':iid,'action':'SOFTRESET'},['lifecycle_state'])
+                print('MCP_SOFTRESET_REQUESTED=yes');print('MCP_PINNED_IMAGE='+image)
+                stable=0
+                for a in range(1,121):
+                  z=await inv(s,'oci.core.ComputeClient','get_instance',{'instance_id':iid},['lifecycle_state']);state=(z.get('data') or {}).get('lifecycle_state');print(f'LIFECYCLE_ATTEMPT={a} STATE={state}',flush=True)
+                  stable=stable+1 if state=='RUNNING' else 0
+                  if stable>=3:break
+                  await asyncio.sleep(10)
+                if stable<3:raise RuntimeError('Instance did not return to stable RUNNING state')
+                vas=await inv(s,'oci.core.ComputeClient','list_vnic_attachments',{'compartment_id':comp,'instance_id':iid},['vnic_id','lifecycle_state'],10);va=next(q for q in it(vas) if q.get('lifecycle_state')=='ATTACHED');vr=await inv(s,'oci.core.VirtualNetworkClient','get_vnic',{'vnic_id':va['vnic_id']},['public_ip']);ip=(vr.get('data') or {}).get('public_ip');open('/tmp/ip','w').write(ip);json.dump({'instance_id':iid,'pinned_image':image,'public_ip':ip,'softreset_requested':True},open('/tmp/reset.json','w'))
+          asyncio.run(main())
+          PY
+      - name: Wait for boot services and initialize WAHA
+        shell: bash
+        env:
+          DOMAIN: ${{ vars.GATEWAY_DOMAIN || 'wa.nitutravels.in' }}
+          API_KEY: ${{ secrets.GATEWAY_API_KEY }}
+        run: |
+          set -u;ip="$(cat /tmp/ip)";c=(--silent --show-error --connect-timeout 8 --max-time 25 --resolve "$DOMAIN:443:$ip");h=000;s=000;status=unknown;body='{}'
+          for a in $(seq 1 150);do h="$(curl "${c[@]}" -o /tmp/h -w '%{http_code}' "https://$DOMAIN/health" 2>/dev/null||true)";s="$(curl "${c[@]}" -H "X-Api-Key: $API_KEY" -o /tmp/s -w '%{http_code}' "https://$DOMAIN/api/sessions/nitu-travels" 2>/dev/null||true)";status="$(jq -r '.status // "unknown"' /tmp/s 2>/dev/null||echo unknown)";echo "VERIFY_ATTEMPT=$a HEALTH=$h SESSION=$s STATUS=$status";if [ "$h" = 200 ]&&[ "$s" = 404 ];then curl "${c[@]}" -H "X-Api-Key: $API_KEY" -H 'Content-Type: application/json' -X POST --data '{"name":"nitu-travels"}' "https://$DOMAIN/api/sessions" >/dev/null 2>&1||true;fi;if [ "$s" = 200 ];then case "$status" in WORKING|SCAN_QR_CODE|PASSKEY_REQUIRED|PASSKEY_CONFIRMATION_REQUIRED)body="$(cat /tmp/s)";break;;STOPPED)curl "${c[@]}" -H "X-Api-Key: $API_KEY" -H 'Content-Type: application/json' -X POST --data '{}' "https://$DOMAIN/api/sessions/nitu-travels/start" >/dev/null 2>&1||true;;FAILED)curl "${c[@]}" -H "X-Api-Key: $API_KEY" -H 'Content-Type: application/json' -X POST --data '{}' "https://$DOMAIN/api/sessions/nitu-travels/restart" >/dev/null 2>&1||true;;esac;fi;sleep 10;done
+          python - "$h" "$s" "$status" "$body" <<'PY'
+          import json,sys
+          x=json.load(open('/tmp/reset.json'));b={}
+          try:b=json.loads(sys.argv[4])
+          except:pass
+          x.update({'health_http':sys.argv[1],'session_http':sys.argv[2],'session_status':sys.argv[3],'engine':((b.get('engine') or {}).get('engine') if isinstance(b.get('engine'),dict) else b.get('engine')),'me':b.get('me')});json.dump(x,open('docs/waha-softreset-installation.json','w'),indent=2,sort_keys=True)
+          PY
+      - name: Persist installation result
+        if: always()
+        run: |
+          test -f docs/waha-softreset-installation.json||echo '{"installation":"failed_before_verification"}' > docs/waha-softreset-installation.json;git config user.name 'github-actions[bot]';git config user.email '4189826+github-actions[bot]@users.noreply.github.com';git add docs/waha-softreset-installation.json;git diff --cached --quiet||git commit -m 'Record WAHA soft-reset installation';git push origin HEAD:${{ github.event.pull_request.head.ref }}
