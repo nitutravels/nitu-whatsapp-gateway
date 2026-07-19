@@ -1,0 +1,6 @@
+Nitu Travels WAHA Core NOWEB Oracle installation
+Release: 2026-07-19.1
+Primary transport: WAHA Core NOWEB
+Session: nitu-travels
+Legacy custom gateway: preserve offline for rollback
+Delivery state after installation: pairing required; website automation remains gated until WORKING
