@@ -1,2 +1,2 @@
-Probe requested: 2026-07-19T12:05Z
-Purpose: restart expired FAILED session and verify SCAN_QR without moving the reserved IP
+Probe requested: 2026-07-19T15:27Z
+Purpose: observe final blue-green candidate and recover an expired QR-ready session if necessary
