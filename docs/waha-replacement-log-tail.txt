@@ -1,0 +1,68 @@
+Downloading cryptography (4.5MiB)
+Downloading pydantic-core (2.0MiB)
+ Downloaded pydantic-core
+ Downloaded cryptography
+Installed 29 packages in 21ms
+Downloading cpython-3.13.14-linux-x86_64-gnu (download) (33.4MiB)
+ Downloaded cpython-3.13.14-linux-x86_64-gnu (download)
+Downloading pydantic-core (2.0MiB)
+Downloading beartype (1.3MiB)
+Downloading pygments (1.2MiB)
+Downloading oci (33.3MiB)
+Downloading cryptography (4.3MiB)
+ Downloaded pydantic-core
+ Downloaded cryptography
+ Downloaded pygments
+ Downloaded beartype
+ Downloaded oci
+Installed 75 packages in 316ms
+/home/runner/.cache/uv/archive-v0/6Yk58A1SqVkOiIQB/lib/python3.13/site-packages/fastmcp/server/auth/jwt_issuer.py:14: AuthlibDeprecationWarning: authlib.jose module is deprecated, please use joserfc instead.
+It will be compatible before version 2.0.0.
+  from authlib.jose import JsonWebToken
+
+
+╭──────────────────────────────────────────────────────────────────────────────╮
+│                                                                              │
+│                                                                              │
+│                         ▄▀▀ ▄▀█ █▀▀ ▀█▀ █▀▄▀█ █▀▀ █▀█                        │
+│                         █▀  █▀█ ▄▄█  █  █ ▀ █ █▄▄ █▀▀                        │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                FastMCP 3.2.4                                 │
+│                            https://gofastmcp.com                             │
+│                                                                              │
+│              🖥  Server:      oracle.oci-cloud-mcp-server, 3.2.4              │
+│              🚀 Deploy free: https://horizon.prefect.io                      │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭──────────────────────────────────────────────────────────────────────────────╮
+│                          🎉 Update available: 3.4.4                          │
+│                      Run: pip install --upgrade fastmcp                      │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+
+INSTANCE_WAIT attempt=1 desired=RUNNING state=PROVISIONING
+INSTANCE_WAIT attempt=2 desired=RUNNING state=PROVISIONING
+INSTANCE_WAIT attempt=3 desired=RUNNING state=PROVISIONING
+INSTANCE_WAIT attempt=4 desired=RUNNING state=RUNNING
+REPLACEMENT_HEALTH attempt=1 error=TimeoutError
+REPLACEMENT_HEALTH attempt=2 error=TimeoutError
+REPLACEMENT_HEALTH attempt=3 error=TimeoutError
+REPLACEMENT_HEALTH attempt=4 error=TimeoutError
+REPLACEMENT_HEALTH attempt=5 error=TimeoutError
+REPLACEMENT_HEALTH attempt=6 error=TimeoutError
+REPLACEMENT_HEALTH attempt=7 error=TimeoutError
+REPLACEMENT_HEALTH attempt=8 error=TimeoutError
+REPLACEMENT_HEALTH attempt=9 error=TimeoutError
+REPLACEMENT_HEALTH attempt=10 error=TimeoutError
+REPLACEMENT_HEALTH attempt=11 error=TimeoutError
+REPLACEMENT_HEALTH attempt=12 error=TimeoutError
+REPLACEMENT_HEALTH attempt=13 error=TimeoutError
+REPLACEMENT_HEALTH attempt=14 error=TimeoutError
+REPLACEMENT_HEALTH attempt=15 health=502 session=502 status=unknown
+REPLACEMENT_HEALTH attempt=16 health=502 session=502 status=unknown
+REPLACEMENT_HEALTH attempt=17 health=200 session=200 status=SCAN_QR_CODE
+FINAL_HTTPS attempt=1 error=RemoteDisconnected
+FINAL_HTTPS attempt=2 error=SSLError
+FINAL_HTTPS attempt=3 health=200 session=200 status=STARTING

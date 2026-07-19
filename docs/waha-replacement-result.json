@@ -1,1 +1,24 @@
-{"result":"workflow_failed_before_controller_result"}
+{
+  "completed_at": "2026-07-19T17:29:11Z",
+  "domain": "wa.nitutravels.in",
+  "new_ephemeral_public_ip": "130.210.28.233",
+  "new_instance_id": "ocid1.instance.oc1.ap-mumbai-1.anrg6ljr724yghqc4ckgiwongwm6ohrspgquhcybvaoqavh7gpf4ibtthygq",
+  "new_private_ip": "10.42.10.97",
+  "old_instance_action": "STOP requested",
+  "old_instance_id": "ocid1.instance.oc1.ap-mumbai-1.anrg6ljr724yghqc4d6hgbco7f5bbllsi6wfqjxlgust5idcqcrcouf2kmoq",
+  "old_private_ip": "10.42.10.235",
+  "public_ip": "137.23.58.166",
+  "replacement_name": "nitu-whatsapp-gateway-waha-29696465805",
+  "reserved_ip_moved": true,
+  "reserved_public_ip_id": "ocid1.publicip.oc1.ap-mumbai-1.amaaaaaa724yghqa4teffn56d7sbpktvv2brmruvj2jog22nncjbcgysrmpa",
+  "result": "success",
+  "session_status": "STARTING",
+  "shape": "VM.Standard.E2.1.Micro",
+  "source_image": {
+    "display_name": "Canonical-Ubuntu-24.04-2026.04.30-1",
+    "id": "ocid1.image.oc1.ap-mumbai-1.aaaaaaaafosoehxawhzdbpie7m5p2i652dkpiesgkxhopeywtc4qw3lvtqpq"
+  },
+  "started_at": "2026-07-19T17:17:05Z",
+  "subnet_id": "ocid1.subnet.oc1.ap-mumbai-1.aaaaaaaa7uvjr53hoghdesy7nlnqhpd625lzxgtnf37n2rzw2ey545njj5iq",
+  "target_image": "ghcr.io/nitutravels/nitu-whatsapp-gateway:replacement-29696465805"
+}
