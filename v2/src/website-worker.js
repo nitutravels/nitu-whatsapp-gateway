@@ -1,5 +1,4 @@
 import config from './config.js';
-import { signPayload } from './security.js';
 
 export class WebsiteWorker {
   constructor(logger) {
@@ -32,8 +31,8 @@ export class WebsiteWorker {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          'user-agent': 'NituWhatsAppGateway/2.1',
-          'x-gateway-signature': signPayload(body)
+          'user-agent': 'NituWhatsAppGateway/2.2',
+          'x-api-key': config.API_KEY
         },
         body,
         signal: AbortSignal.timeout(20_000)
