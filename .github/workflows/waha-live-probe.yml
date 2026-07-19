@@ -1,0 +1,73 @@
+name: Probe WAHA production
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Configure OCI credentials
+        env:
+          OCI_PRIVATE_KEY_PEM: ${{ secrets.OCI_PRIVATE_KEY }}
+          OCI_FINGERPRINT_VALUE: ${{ secrets.OCI_FINGERPRINT }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$HOME/.oci"
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          value = os.environ.get('OCI_PRIVATE_KEY_PEM', '').strip()
+          if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+              value = value[1:-1]
+          if '\\n' in value and '\n' not in value:
+              value = value.replace('\\r', '').replace('\\n', '\n')
+          Path.home().joinpath('.oci/key.pem').write_text(value.replace('\r', '').strip() + '\n')
+          PY
+          chmod 600 "$HOME/.oci/key.pem"
+          fingerprint="$(printf '%s' "$OCI_FINGERPRINT_VALUE" | tr -d '[:space:]')"
+          cat > "$HOME/.oci/config" <<EOF
+          [DEFAULT]
+          user=${{ secrets.OCI_USER_OCID }}
+          fingerprint=$fingerprint
+          tenancy=${{ secrets.OCI_TENANCY_OCID }}
+          region=${{ vars.OCI_REGION }}
+          key_file=$HOME/.oci/key.pem
+          EOF
+          chmod 600 "$HOME/.oci/config"
+      - name: Install OCI CLI
+        run: pipx install --quiet oci-cli
+      - name: Probe instance and WAHA
+        env:
+          COMPARTMENT_OCID: ${{ vars.OCI_COMPARTMENT_OCID }}
+          DOMAIN: ${{ vars.GATEWAY_DOMAIN || 'wa.nitutravels.in' }}
+          API_KEY: ${{ secrets.GATEWAY_API_KEY }}
+        run: |
+          set -Eeuo pipefail
+          instance_id="$(oci compute instance list --compartment-id "$COMPARTMENT_OCID" --display-name nitu-whatsapp-gateway --all --query 'data[?"lifecycle-state"!=`TERMINATED`].id | [0]' --raw-output)"
+          lifecycle="$(oci compute instance get --instance-id "$instance_id" --query 'data."lifecycle-state"' --raw-output)"
+          vnic_id="$(oci compute vnic-attachment list --compartment-id "$COMPARTMENT_OCID" --instance-id "$instance_id" --all --query 'data[?"lifecycle-state"==`ATTACHED`]."vnic-id" | [0]' --raw-output)"
+          public_ip="$(oci network vnic get --vnic-id "$vnic_id" --query 'data."public-ip"' --raw-output)"
+          image_b64="$(oci compute instance get --instance-id "$instance_id" --query 'data.metadata.gateway_env_b64' --raw-output)"
+          image="$(printf '%s' "$image_b64" | base64 --decode | sed -n 's/^GATEWAY_IMAGE=//p' | head -1)"
+          echo "INSTANCE_LIFECYCLE=$lifecycle"
+          echo "PUBLIC_IP=$public_ip"
+          echo "PINNED_IMAGE=$image"
+          curl_base=(--silent --show-error --connect-timeout 8 --max-time 20 --resolve "$DOMAIN:443:$public_ip")
+          health_code="$(curl "${curl_base[@]}" -o /tmp/health.json -w '%{http_code}' "https://$DOMAIN/health" || true)"
+          session_code="$(curl "${curl_base[@]}" -H "X-Api-Key: $API_KEY" -o /tmp/session.json -w '%{http_code}' "https://$DOMAIN/api/sessions/nitu-travels" || true)"
+          echo "HEALTH_HTTP=$health_code"
+          echo "SESSION_HTTP=$session_code"
+          if [ -s /tmp/health.json ]; then jq -c '{status:.status,services:.services}' /tmp/health.json 2>/dev/null || head -c 300 /tmp/health.json; fi
+          if [ -s /tmp/session.json ]; then jq -c '{name,status,engine:(.engine.engine // .engine.name // null),me:(if .me then {id:.me.id,pushName:.me.pushName} else null end)}' /tmp/session.json 2>/dev/null || head -c 500 /tmp/session.json; fi
+          test "$lifecycle" = RUNNING
+          test "$health_code" = 200
+          case "$session_code" in 200|404) ;; *) exit 1;; esac
