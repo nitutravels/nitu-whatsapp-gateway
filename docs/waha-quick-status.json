@@ -1,0 +1,7 @@
+{
+  "health_http": "502",
+  "lifecycle_state": "RUNNING",
+  "pinned_image": "ghcr.io/nitutravels/nitu-whatsapp-gateway:official-mcp-waha-20260719",
+  "public_ip": "137.23.58.166",
+  "session_http": "502"
+}
