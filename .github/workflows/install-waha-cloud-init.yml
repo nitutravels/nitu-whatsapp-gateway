@@ -1,0 +1,261 @@
+name: Install WAHA through Oracle cloud-init
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/install-waha-cloud-init.yml'
+      - 'waha-oracle/CLOUD-INIT-INSTALL'
+      - 'waha-oracle/install-waha.sh'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nitu-waha-cloud-init-install
+  cancel-in-progress: false
+
+jobs:
+  install:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 75
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Configure OCI CLI
+        shell: bash
+        env:
+          OCI_PRIVATE_KEY_PEM: ${{ secrets.OCI_PRIVATE_KEY }}
+          OCI_FINGERPRINT_VALUE: ${{ secrets.OCI_FINGERPRINT }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$HOME/.oci"
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          value=os.environ.get('OCI_PRIVATE_KEY_PEM','').strip()
+          if len(value)>=2 and value[0]==value[-1] and value[0] in {'"',"'"}: value=value[1:-1]
+          if '\\n' in value and '\n' not in value: value=value.replace('\\r','').replace('\\n','\n')
+          Path.home().joinpath('.oci/key.pem').write_text(value.replace('\r','').strip()+'\n')
+          PY
+          chmod 600 "$HOME/.oci/key.pem"
+          cat > "$HOME/.oci/config" <<EOF
+          [DEFAULT]
+          user=${{ secrets.OCI_USER_OCID }}
+          fingerprint=$(printf '%s' "$OCI_FINGERPRINT_VALUE" | tr -d '[:space:]')
+          tenancy=${{ secrets.OCI_TENANCY_OCID }}
+          region=${{ vars.OCI_REGION }}
+          key_file=$HOME/.oci/key.pem
+          EOF
+          chmod 600 "$HOME/.oci/config"
+          pipx install --quiet oci-cli
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Prepare private first-boot bootstrap
+        id: prepare
+        shell: bash
+        env:
+          TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
+          CONFIGURED_COMPARTMENT_OCID: ${{ vars.OCI_COMPARTMENT_OCID }}
+          CONFIGURED_NAMESPACE: ${{ vars.OCI_NAMESPACE }}
+          STATE_BUCKET: ${{ vars.OCI_TF_STATE_BUCKET }}
+          REGION: ${{ vars.OCI_REGION }}
+          WAHA_API_KEY: ${{ secrets.GATEWAY_API_KEY }}
+          WAHA_DASHBOARD_PASSWORD: ${{ secrets.GATEWAY_ADMIN_TOKEN }}
+          WAHA_WEBHOOK_SECRET: ${{ secrets.GATEWAY_WEBHOOK_SECRET }}
+          WAHA_WORKER_KEY: ${{ secrets.GATEWAY_API_KEY }}
+          WAHA_DOMAIN: ${{ vars.GATEWAY_DOMAIN || 'wa.nitutravels.in' }}
+        run: |
+          set -Eeuo pipefail
+          compartment="$CONFIGURED_COMPARTMENT_OCID"
+          if [[ ! "$compartment" =~ ^ocid1\.compartment\. ]]; then
+            compartment="$(oci iam compartment list --compartment-id "$TENANCY_OCID" --compartment-id-in-subtree true --access-level ANY --all --output json | jq -r '[.data[]|select(.name=="NituWAGateway" and .["lifecycle-state"]=="ACTIVE")|.id][0]//empty')"
+          fi
+          [[ "$compartment" =~ ^ocid1\.compartment\. ]] || { echo '::error::Unable to resolve NituWAGateway compartment'; exit 1; }
+          namespace="$CONFIGURED_NAMESPACE"
+          if [ -z "$namespace" ] || [ "$namespace" = null ]; then namespace="$(oci os ns get --query data --raw-output)"; fi
+          [ -n "$namespace" ] || { echo '::error::Unable to resolve Object Storage namespace'; exit 1; }
+          [ -n "$STATE_BUCKET" ] || { echo '::error::OCI_TF_STATE_BUCKET is missing'; exit 1; }
+
+          installer_object="waha/cloud-init-installer-${GITHUB_SHA}.sh"
+          oci os object put --namespace-name "$namespace" --bucket-name "$STATE_BUCKET" --name "$installer_object" --file waha-oracle/install-waha.sh --force >/dev/null
+          expires="$(date -u -d '+6 hours' '+%Y-%m-%dT%H:%M:%SZ')"
+          installer_par="$(oci os preauth-request create --namespace-name "$namespace" --bucket-name "$STATE_BUCKET" --name "waha-cloud-init-installer-${GITHUB_RUN_ID}" --access-type ObjectRead --object-name "$installer_object" --time-expires "$expires" --query 'data."access-uri"' --raw-output)"
+          installer_url="https://objectstorage.${REGION}.oraclecloud.com${installer_par}"
+
+          api_b64="$(printf '%s' "$WAHA_API_KEY" | base64 -w0)"
+          dashboard_b64="$(printf '%s' "$WAHA_DASHBOARD_PASSWORD" | base64 -w0)"
+          webhook_b64="$(printf '%s' "$WAHA_WEBHOOK_SECRET" | base64 -w0)"
+          worker_b64="$(printf '%s' "$WAHA_WORKER_KEY" | base64 -w0)"
+
+          cat > /tmp/cloud-init.yaml <<EOF
+          #cloud-config
+          package_update: true
+          packages:
+            - ca-certificates
+            - curl
+          write_files:
+            - path: /root/nitu-waha-firstboot.sh
+              permissions: '0700'
+              owner: root:root
+              encoding: b64
+              content: $(cat <<SCRIPT | base64 -w0
+          #!/usr/bin/env bash
+          set -Eeuo pipefail
+          umask 077
+          exec > /var/log/nitu-waha-firstboot.log 2>&1
+          echo "FIRSTBOOT_STARTED=$(date -u +%FT%TZ)"
+          curl -fsSL '$installer_url' -o /root/install-waha.sh
+          chmod 700 /root/install-waha.sh
+          WAHA_API_KEY_B64='$api_b64' \\
+          WAHA_DASHBOARD_PASSWORD_B64='$dashboard_b64' \\
+          WAHA_WEBHOOK_SECRET_B64='$webhook_b64' \\
+          WAHA_WORKER_KEY_B64='$worker_b64' \\
+          WAHA_DOMAIN='$WAHA_DOMAIN' \\
+          /root/install-waha.sh
+          echo "FIRSTBOOT_FINISHED=$(date -u +%FT%TZ)"
+          SCRIPT
+          )
+          runcmd:
+            - [bash, -lc, '/root/nitu-waha-firstboot.sh']
+          final_message: 'Nitu Travels WAHA first-boot installation completed'
+          EOF
+          user_data="$(base64 -w0 /tmp/cloud-init.yaml)"
+          echo "compartment=$compartment" >> "$GITHUB_OUTPUT"
+          echo "user_data=$user_data" >> "$GITHUB_OUTPUT"
+
+      - name: Replace unsuccessful fresh boot volume and verify WAHA
+        shell: bash
+        env:
+          COMPARTMENT_OCID: ${{ steps.prepare.outputs.compartment }}
+          USER_DATA_B64: ${{ steps.prepare.outputs.user_data }}
+          DOMAIN: ${{ vars.GATEWAY_DOMAIN || 'wa.nitutravels.in' }}
+          WAHA_API_KEY: ${{ secrets.GATEWAY_API_KEY }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p docs
+          exec > >(tee docs/waha-cloud-init-result.txt) 2>&1
+          echo 'WAHA_CLOUD_INIT_INSTALL_BEGIN'
+          echo "STARTED_AT=$(date -u +%FT%TZ)"
+
+          instance_id="$(oci compute instance list --compartment-id "$COMPARTMENT_OCID" --display-name nitu-whatsapp-gateway --all --query 'data[?"lifecycle-state"!=`TERMINATED`].id | [0]' --raw-output)"
+          [[ "$instance_id" =~ ^ocid1\.instance\. ]] || { echo 'INSTALL_RESULT=failed'; echo 'ERROR=Oracle instance not found'; exit 1; }
+          oci compute instance get --instance-id "$instance_id" --output json > /tmp/instance.json
+          state="$(jq -r '.data["lifecycle-state"]' /tmp/instance.json)"
+          shape="$(jq -r '.data.shape' /tmp/instance.json)"
+          ad="$(jq -r '.data["availability-domain"]' /tmp/instance.json)"
+          image="$(jq -r '.data["image-id"] // empty' /tmp/instance.json)"
+          [[ "$image" =~ ^ocid1\.image\. ]] || { echo 'INSTALL_RESULT=failed'; echo 'ERROR=Current Ubuntu image was not resolved'; exit 1; }
+          vnic="$(oci compute vnic-attachment list --compartment-id "$COMPARTMENT_OCID" --instance-id "$instance_id" --all --query 'data[?"lifecycle-state"==`ATTACHED`]."vnic-id" | [0]' --raw-output)"
+          public_ip="$(oci network vnic get --vnic-id "$vnic" --query 'data."public-ip"' --raw-output)"
+          current_boot="$(oci compute boot-volume-attachment list --availability-domain "$ad" --compartment-id "$COMPARTMENT_OCID" --instance-id "$instance_id" --all --query 'data[?"lifecycle-state"==`ATTACHED`]."boot-volume-id" | [0]' --raw-output)"
+          rollback_boot="$(grep '^PRESERVED_BOOT_VOLUME=' docs/waha-oracle-install-result.txt 2>/dev/null | tail -1 | cut -d= -f2- || true)"
+          if [[ ! "$rollback_boot" =~ ^ocid1\.bootvolume\. ]]; then
+            rollback_boot='ocid1.bootvolume.oc1.ap-mumbai-1.abrg6ljrkoazxrkea4slxzw55oqmtfdsncly3c7odpf633wd2tzhdvw67fwq'
+          fi
+          echo "INSTANCE_ID=$instance_id"
+          echo "INSTANCE_SHAPE=$shape"
+          echo "PUBLIC_IP=$public_ip"
+          echo "UNSUCCESSFUL_BOOT_VOLUME=$current_boot"
+          echo "PRESERVED_ROLLBACK_BOOT_VOLUME=$rollback_boot"
+
+          rollback_needed=0
+          rollback() {
+            rc=$?
+            trap - ERR
+            set +e
+            echo "INSTALL_FAILURE_CODE=$rc"
+            if [ "$rollback_needed" -eq 1 ]; then
+              echo 'ROLLBACK_BEGIN=yes'
+              for attempt in $(seq 1 40); do
+                lifecycle="$(oci compute instance get --instance-id "$instance_id" --query 'data."lifecycle-state"' --raw-output 2>/dev/null || true)"
+                [ "$lifecycle" = STOPPED ] && break
+                if [ "$lifecycle" = RUNNING ]; then oci compute instance action --instance-id "$instance_id" --action STOP >/dev/null 2>&1 || true; fi
+                sleep 20
+              done
+              if oci compute instance update-instance-update-instance-source-via-boot-volume-details --instance-id "$instance_id" --source-details-boot-volume-id "$rollback_boot" --source-details-is-preserve-boot-volume-enabled false --update-operation-constraint ALLOW_DOWNTIME --force --wait-for-state STOPPED --max-wait-seconds 1800 >/tmp/rollback.json 2>/tmp/rollback.err; then
+                sleep 45
+                for attempt in $(seq 1 30); do
+                  oci compute instance action --instance-id "$instance_id" --action START >/dev/null 2>&1 && break
+                  sleep 20
+                done
+                echo 'ROLLBACK_RESULT=legacy_boot_volume_restored'
+              else
+                echo 'ROLLBACK_RESULT=failed'
+                tail -n 5 /tmp/rollback.err 2>/dev/null || true
+              fi
+            else
+              echo 'ROLLBACK_RESULT=not_required'
+            fi
+            echo 'INSTALL_RESULT=failed'
+            echo "FINISHED_AT=$(date -u +%FT%TZ)"
+            echo 'WAHA_CLOUD_INIT_INSTALL_END'
+            exit "$rc"
+          }
+          trap rollback ERR
+
+          if [ "$state" != STOPPED ]; then
+            echo 'STOPPING_FRESH_OS=yes'
+            oci compute instance action --instance-id "$instance_id" --action STOP --wait-for-state STOPPED --max-wait-seconds 900 >/dev/null
+          fi
+
+          oci compute instance get --instance-id "$instance_id" --output json > /tmp/stopped-instance.json
+          jq --arg user_data "$USER_DATA_B64" '.data.metadata | .user_data=$user_data' /tmp/stopped-instance.json > /tmp/metadata.json
+          oci compute instance update --instance-id "$instance_id" --metadata file:///tmp/metadata.json --update-operation-constraint AVOID_DOWNTIME --force >/dev/null
+          echo 'FIRST_BOOT_USER_DATA_INSTALLED=yes'
+
+          rollback_needed=1
+          oci compute instance update-instance-update-instance-source-via-image-details --instance-id "$instance_id" --source-details-image-id "$image" --source-details-is-preserve-boot-volume-enabled false --update-operation-constraint ALLOW_DOWNTIME --force --wait-for-state STOPPED --max-wait-seconds 1800 >/tmp/reimage.json
+          echo 'CLOUD_INIT_BOOT_VOLUME_READY=yes'
+
+          sleep 60
+          started=0
+          for attempt in $(seq 1 40); do
+            lifecycle="$(oci compute instance get --instance-id "$instance_id" --query 'data."lifecycle-state"' --raw-output)"
+            echo "START_ATTEMPT=$attempt STATE=$lifecycle"
+            if [ "$lifecycle" = RUNNING ]; then started=1; break; fi
+            if [ "$lifecycle" = STOPPED ]; then oci compute instance action --instance-id "$instance_id" --action START >/tmp/start.json 2>/tmp/start.err || true; fi
+            sleep 20
+          done
+          [ "$started" -eq 1 ] || { echo 'ERROR=Cloud-init Oracle OS did not reach RUNNING'; false; }
+          echo 'CLOUD_INIT_OS_RUNNING=yes'
+
+          verified=0
+          final_status=UNKNOWN
+          for attempt in $(seq 1 180); do
+            args=(--silent --show-error --connect-timeout 8 --max-time 20 --resolve "$DOMAIN:443:$public_ip")
+            health_code="$(curl "${args[@]}" -o /tmp/health.json -w '%{http_code}' "https://$DOMAIN/health" 2>/dev/null || true)"
+            version_code="$(curl "${args[@]}" -H "X-Api-Key: $WAHA_API_KEY" -o /tmp/version.json -w '%{http_code}' "https://$DOMAIN/api/server/version" 2>/dev/null || true)"
+            session_code="$(curl "${args[@]}" -H "X-Api-Key: $WAHA_API_KEY" -o /tmp/session.json -w '%{http_code}' "https://$DOMAIN/api/sessions/nitu-travels" 2>/dev/null || true)"
+            engine="$(jq -r '.engine // "unknown"' /tmp/version.json 2>/dev/null || echo unknown)"
+            final_status="$(jq -r '.status // "UNKNOWN"' /tmp/session.json 2>/dev/null || echo UNKNOWN)"
+            echo "VERIFY_ATTEMPT=$attempt HEALTH=${health_code:-000} VERSION=${version_code:-000} SESSION=${session_code:-000} ENGINE=$engine STATUS=$final_status"
+            if [ "$health_code" = 200 ] && [ "$version_code" = 200 ] && [ "$session_code" = 200 ] && [ "$engine" = NOWEB ]; then
+              case "$final_status" in WORKING|SCAN_QR_CODE) verified=1; break ;; esac
+            fi
+            sleep 10
+          done
+          [ "$verified" -eq 1 ] || { echo 'ERROR=WAHA did not reach a verified usable or QR-ready state'; false; }
+
+          rollback_needed=0
+          trap - ERR
+          echo 'INSTALL_RESULT=success'
+          echo "SESSION_STATUS=$final_status"
+          echo "FINISHED_AT=$(date -u +%FT%TZ)"
+          echo 'WAHA_CLOUD_INIT_INSTALL_END'
+
+      - name: Persist sanitized cloud-init result
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -f docs/waha-cloud-init-result.txt || echo 'WAHA cloud-init installation produced no result file.' > docs/waha-cloud-init-result.txt
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/waha-cloud-init-result.txt
+          git diff --cached --quiet || git commit -m 'Record WAHA cloud-init installation result'
+          git pull --rebase origin main
+          git push origin HEAD:main
