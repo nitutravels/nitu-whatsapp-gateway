@@ -1,0 +1,3 @@
+Corrected image deployment requested: 2026-07-19T13:31Z
+Fix: delegate to official /entrypoint.sh
+Mode: immutable image + OCI metadata sync, no reboot
