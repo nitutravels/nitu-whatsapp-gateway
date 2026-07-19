@@ -1,0 +1,220 @@
+2026-07-19T17:10:56.0718084Z  Kernel Version: 6.17.0-1020-azure
+2026-07-19T17:10:56.0718445Z  Operating System: Ubuntu 24.04.4 LTS
+2026-07-19T17:10:56.0718807Z  OSType: linux
+2026-07-19T17:10:56.0719096Z  Architecture: x86_64
+2026-07-19T17:10:56.0719392Z  CPUs: 4
+2026-07-19T17:10:56.0719670Z  Total Memory: 15.62GiB
+2026-07-19T17:10:56.0719976Z  Name: runnervm3jd5f
+2026-07-19T17:10:56.0720303Z  ID: 68db87d9-67e2-46d2-9032-068bf1883f31
+2026-07-19T17:10:56.0720677Z  Docker Root Dir: /var/lib/docker
+2026-07-19T17:10:56.0721020Z  Debug Mode: false
+2026-07-19T17:10:56.0721811Z  Username: githubactions
+2026-07-19T17:10:56.0722191Z  Experimental: false
+2026-07-19T17:10:56.0722508Z  Insecure Registries:
+2026-07-19T17:10:56.0722822Z   ::1/128
+2026-07-19T17:10:56.0723079Z   127.0.0.0/8
+2026-07-19T17:10:56.0723359Z  Live Restore Enabled: false
+2026-07-19T17:10:56.0723568Z 
+2026-07-19T17:10:56.0730826Z ##[endgroup]
+2026-07-19T17:10:56.0732117Z ##[group]Proxy configuration
+2026-07-19T17:10:56.0735216Z No proxy configuration found
+2026-07-19T17:10:56.0736368Z ##[endgroup]
+2026-07-19T17:10:56.1421715Z ##[group]Buildx version
+2026-07-19T17:10:56.1447378Z [command]/usr/bin/docker buildx version
+2026-07-19T17:10:56.1945849Z github.com/docker/buildx v0.35.0 a319e5b15052cf6557ceb666eb8ff6e32380b782
+2026-07-19T17:10:56.1975439Z ##[endgroup]
+2026-07-19T17:10:56.1976288Z ##[group]Builder info
+2026-07-19T17:10:56.2804515Z {
+2026-07-19T17:10:56.2805102Z   "nodes": [
+2026-07-19T17:10:56.2805547Z     {
+2026-07-19T17:10:56.2806113Z       "name": "builder-a0694a58-2c0a-440f-8c3c-ad2000e59a440",
+2026-07-19T17:10:56.2806786Z       "endpoint": "unix:///var/run/docker.sock",
+2026-07-19T17:10:56.2807280Z       "status": "running",
+2026-07-19T17:10:56.2808007Z       "buildkitd-flags": "--allow-insecure-entitlement security.insecure --allow-insecure-entitlement network.host",
+2026-07-19T17:10:56.2808931Z       "buildkit": "v0.31.2",
+2026-07-19T17:10:56.2809495Z       "platforms": "linux/amd64,linux/amd64/v2,linux/amd64/v3,linux/386",
+2026-07-19T17:10:56.2810160Z       "features": {
+2026-07-19T17:10:56.2810765Z         "Automatically load images to the Docker Engine image store": true,
+2026-07-19T17:10:56.2811666Z         "Cache export": true,
+2026-07-19T17:10:56.2812362Z         "Direct push": true,
+2026-07-19T17:10:56.2812755Z         "Docker exporter": true,
+2026-07-19T17:10:56.2813272Z         "Multi-platform build": true,
+2026-07-19T17:10:56.2813670Z         "OCI exporter": true
+2026-07-19T17:10:56.2814085Z       },
+2026-07-19T17:10:56.2814379Z       "labels": {
+2026-07-19T17:10:56.2814840Z         "org.mobyproject.buildkit.worker.executor": "oci",
+2026-07-19T17:10:56.2815377Z         "org.mobyproject.buildkit.worker.hostname": "340784e8f25a",
+2026-07-19T17:10:56.2815893Z         "org.mobyproject.buildkit.worker.network": "host",
+2026-07-19T17:10:56.2816837Z         "org.mobyproject.buildkit.worker.oci.process-mode": "sandbox",
+2026-07-19T17:10:56.2817693Z         "org.mobyproject.buildkit.worker.selinux.enabled": "false",
+2026-07-19T17:10:56.2818420Z         "org.mobyproject.buildkit.worker.snapshotter": "overlayfs"
+2026-07-19T17:10:56.2818990Z       },
+2026-07-19T17:10:56.2819271Z       "gcPolicy": [
+2026-07-19T17:10:56.2819669Z         {
+2026-07-19T17:10:56.2819984Z           "all": false,
+2026-07-19T17:10:56.2820371Z           "filter": [
+2026-07-19T17:10:56.2820809Z             "type==source.local type==exec.cachemount type==source.git.checkout"
+2026-07-19T17:10:56.2821819Z           ],
+2026-07-19T17:10:56.2822134Z           "keepDuration": "48h0m0s",
+2026-07-19T17:10:56.2822526Z           "maxUsedSpace": "488.3MiB"
+2026-07-19T17:10:56.2822970Z         },
+2026-07-19T17:10:56.2823239Z         {
+2026-07-19T17:10:56.2823667Z           "all": false,
+2026-07-19T17:10:56.2824191Z           "keepDuration": "1440h0m0s",
+2026-07-19T17:10:56.2824827Z           "reservedSpace": "9.313GiB",
+2026-07-19T17:10:56.2825451Z           "maxUsedSpace": "93.13GiB",
+2026-07-19T17:10:56.2825877Z           "minFreeSpace": "27.01GiB"
+2026-07-19T17:10:56.2826214Z         },
+2026-07-19T17:10:56.2826584Z         {
+2026-07-19T17:10:56.2826866Z           "all": false,
+2026-07-19T17:10:56.2827304Z           "reservedSpace": "9.313GiB",
+2026-07-19T17:10:56.2827684Z           "maxUsedSpace": "93.13GiB",
+2026-07-19T17:10:56.2828157Z           "minFreeSpace": "27.01GiB"
+2026-07-19T17:10:56.2828505Z         },
+2026-07-19T17:10:56.2828831Z         {
+2026-07-19T17:10:56.2829302Z           "all": true,
+2026-07-19T17:10:56.2829826Z           "reservedSpace": "9.313GiB",
+2026-07-19T17:10:56.2830531Z           "maxUsedSpace": "93.13GiB",
+2026-07-19T17:10:56.2831102Z           "minFreeSpace": "27.01GiB"
+2026-07-19T17:10:56.2831927Z         }
+2026-07-19T17:10:56.2832291Z       ]
+2026-07-19T17:10:56.2832601Z     }
+2026-07-19T17:10:56.2832864Z   ],
+2026-07-19T17:10:56.2833312Z   "name": "builder-a0694a58-2c0a-440f-8c3c-ad2000e59a44",
+2026-07-19T17:10:56.2833862Z   "driver": "docker-container",
+2026-07-19T17:10:56.2834237Z   "lastActivity": "2026-07-19T17:10:51.000Z"
+2026-07-19T17:10:56.2834703Z }
+2026-07-19T17:10:56.2835362Z ##[endgroup]
+2026-07-19T17:10:56.3510981Z [command]/usr/bin/docker buildx build --cache-from type=gha,scope=waha-replacement-amd64 --cache-to type=gha,mode=max,scope=waha-replacement-amd64 --file Dockerfile --iidfile /home/runner/work/_temp/docker-actions-toolkit-94qebe/build-iidfile-ff12734024.txt --platform linux/amd64 --attest type=provenance,mode=max,builder-id=https://github.com/nitutravels/nitu-whatsapp-gateway/actions/runs/29696311692/attempts/1 --attest type=sbom,disabled=false --tag ghcr.io/nitutravels/nitu-whatsapp-gateway:replacement-29696311692 --metadata-file /home/runner/work/_temp/docker-actions-toolkit-94qebe/build-metadata-08871efc64.json --push .
+2026-07-19T17:10:56.5612278Z #0 building with "builder-a0694a58-2c0a-440f-8c3c-ad2000e59a44" instance using docker-container driver
+2026-07-19T17:10:56.5613163Z 
+2026-07-19T17:10:56.5613399Z #1 [internal] load build definition from Dockerfile
+2026-07-19T17:10:56.5614040Z #1 transferring dockerfile: 881B done
+2026-07-19T17:10:56.5614652Z #1 DONE 0.0s
+2026-07-19T17:10:56.5614825Z 
+2026-07-19T17:10:56.5615101Z #2 [auth] docker/buildkit-syft-scanner:pull token for registry-1.docker.io
+2026-07-19T17:10:56.7113694Z #2 DONE 0.0s
+2026-07-19T17:10:56.7114025Z 
+2026-07-19T17:10:56.7114576Z #3 resolve image config for docker-image://docker.io/docker/buildkit-syft-scanner:stable-1
+2026-07-19T17:10:56.8628201Z #3 DONE 0.4s
+2026-07-19T17:10:57.0197186Z 
+2026-07-19T17:10:57.0197857Z #4 [auth] devlikeapro/waha:pull token for registry-1.docker.io
+2026-07-19T17:10:57.0212455Z #4 DONE 0.0s
+2026-07-19T17:10:57.0212762Z 
+2026-07-19T17:10:57.0213219Z #5 [internal] load metadata for docker.io/devlikeapro/waha:noweb-arm-2026.7.1
+2026-07-19T17:10:57.0448914Z #5 ERROR: no match for platform in manifest: not found
+2026-07-19T17:10:57.0633672Z ------
+2026-07-19T17:10:57.0635403Z  > [internal] load metadata for docker.io/devlikeapro/waha:noweb-arm-2026.7.1:
+2026-07-19T17:10:57.0636638Z ------
+2026-07-19T17:10:57.0714680Z Dockerfile:1
+2026-07-19T17:10:57.0735633Z --------------------
+2026-07-19T17:10:57.0736109Z    1 | >>> FROM devlikeapro/waha:noweb-arm-2026.7.1
+2026-07-19T17:10:57.0736523Z    2 |     
+2026-07-19T17:10:57.0737086Z    3 |     LABEL org.opencontainers.image.source="https://github.com/nitutravels/nitu-whatsapp-gateway" \
+2026-07-19T17:10:57.0737694Z --------------------
+2026-07-19T17:10:57.0738589Z ERROR: failed to build: failed to solve: devlikeapro/waha:noweb-arm-2026.7.1: failed to resolve source metadata for docker.io/devlikeapro/waha:noweb-arm-2026.7.1: no match for platform in manifest: not found
+2026-07-19T17:10:57.0763660Z ##[group]Reference
+2026-07-19T17:10:57.1592159Z builder-a0694a58-2c0a-440f-8c3c-ad2000e59a44/builder-a0694a58-2c0a-440f-8c3c-ad2000e59a440/ozwwbv1tsq57helra8f9ebqf9
+2026-07-19T17:10:57.1593824Z ##[endgroup]
+2026-07-19T17:10:57.1594703Z ##[group]Check build summary support
+2026-07-19T17:10:57.1597264Z Build summary supported!
+2026-07-19T17:10:57.1598251Z ##[endgroup]
+2026-07-19T17:10:57.1621839Z ##[error]buildx failed with: ERROR: failed to build: failed to solve: devlikeapro/waha:noweb-arm-2026.7.1: failed to resolve source metadata for docker.io/devlikeapro/waha:noweb-arm-2026.7.1: no match for platform in manifest: not found
+2026-07-19T17:10:57.1799135Z ##[group]Run set -Eeuo pipefail
+2026-07-19T17:10:57.1799601Z [36;1mset -Eeuo pipefail[0m
+2026-07-19T17:10:57.1799960Z [36;1mmkdir -p docs[0m
+2026-07-19T17:10:57.1800375Z [36;1mif [ ! -f docs/waha-replacement-result.json ]; then[0m
+2026-07-19T17:10:57.1801071Z [36;1m  echo '{"result":"workflow_failed_before_controller_result"}' > docs/waha-replacement-result.json[0m
+2026-07-19T17:10:57.1801856Z [36;1mfi[0m
+2026-07-19T17:10:57.1802670Z [36;1mtail -n 250 /tmp/replacement.log 2>/dev/null | sed -E 's/(API_KEY|ADMIN_TOKEN|WEBHOOK_SECRET|POSTGRES_PASSWORD)=([^[:space:]]+)/\1=***REDACTED***/Ig' > docs/waha-replacement-log-tail.txt || true[0m
+2026-07-19T17:10:57.1803611Z [36;1mgit config user.name 'github-actions[bot]'[0m
+2026-07-19T17:10:57.1804166Z [36;1mgit config user.email '4189826+github-actions[bot]@users.noreply.github.com'[0m
+2026-07-19T17:10:57.1804849Z [36;1mgit add docs/waha-replacement-result.json docs/waha-replacement-log-tail.txt[0m
+2026-07-19T17:10:57.1805618Z [36;1mgit diff --cached --quiet || git commit -m 'Record deterministic Oracle WAHA replacement result'[0m
+2026-07-19T17:10:57.1806329Z [36;1mgit pull --rebase origin "probe/waha-install-20260719" || true[0m
+2026-07-19T17:10:57.1806854Z [36;1mgit push origin HEAD:"probe/waha-install-20260719"[0m
+2026-07-19T17:10:57.1888682Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-07-19T17:10:57.1889169Z ##[endgroup]
+2026-07-19T17:10:57.2182343Z [probe/waha-install-20260719 6884182] Record deterministic Oracle WAHA replacement result
+2026-07-19T17:10:57.2183324Z  2 files changed, 1 insertion(+)
+2026-07-19T17:10:57.2183953Z  create mode 100644 docs/waha-replacement-log-tail.txt
+2026-07-19T17:10:57.2184814Z  create mode 100644 docs/waha-replacement-result.json
+2026-07-19T17:10:57.3565877Z From https://github.com/nitutravels/nitu-whatsapp-gateway
+2026-07-19T17:10:57.3566799Z  * branch            probe/waha-install-20260719 -> FETCH_HEAD
+2026-07-19T17:10:57.3658191Z Current branch probe/waha-install-20260719 is up to date.
+2026-07-19T17:10:58.1759143Z To https://github.com/nitutravels/nitu-whatsapp-gateway
+2026-07-19T17:10:58.1759892Z    4e5142f..6884182  HEAD -> probe/waha-install-20260719
+2026-07-19T17:10:58.1900615Z Post job cleanup.
+2026-07-19T17:10:58.4205317Z ##[group]Generating build summary
+2026-07-19T17:10:58.5039788Z exporting build record to /home/runner/work/_temp/docker-actions-toolkit-S5BvZU/export
+2026-07-19T17:10:58.6045080Z [command]/usr/bin/docker buildx history export --builder builder-a0694a58-2c0a-440f-8c3c-ad2000e59a44 --output /home/runner/work/_temp/docker-actions-toolkit-S5BvZU/export/nitutravels~nitu-whatsapp-gateway~OZWWBV.dockerbuild ozwwbv1tsq57helra8f9ebqf9 --finalize
+2026-07-19T17:10:58.7445404Z Build record written to /home/runner/work/_temp/docker-actions-toolkit-S5BvZU/export/nitutravels~nitu-whatsapp-gateway~OZWWBV.dockerbuild (14.75 KB)
+2026-07-19T17:10:58.7453747Z Uploading nitutravels~nitu-whatsapp-gateway~OZWWBV.dockerbuild as an artifact
+2026-07-19T17:10:58.7457984Z Artifact name is valid!
+2026-07-19T17:10:58.7458663Z Root directory input is valid!
+2026-07-19T17:10:58.8641337Z Uploading artifact: nitutravels~nitu-whatsapp-gateway~OZWWBV.dockerbuild
+2026-07-19T17:10:58.8679707Z Beginning upload of artifact content to blob storage
+2026-07-19T17:10:58.9335837Z Uploaded bytes 15109
+2026-07-19T17:10:58.9539705Z Finished uploading artifact content to blob storage!
+2026-07-19T17:10:58.9541128Z SHA256 digest of uploaded artifact is 60152077018690c3da3b4bf449bf4b94036513d541ae2d62417e8acb67e302c0
+2026-07-19T17:10:58.9542716Z Finalizing artifact upload
+2026-07-19T17:10:59.1263681Z Artifact nitutravels~nitu-whatsapp-gateway~OZWWBV.dockerbuild successfully finalized. Artifact ID 8445095903
+2026-07-19T17:10:59.1265491Z Artifact download URL: https://github.com/nitutravels/nitu-whatsapp-gateway/actions/runs/29696311692/artifacts/8445095903
+2026-07-19T17:10:59.1303462Z Writing summary
+2026-07-19T17:10:59.1315681Z ##[endgroup]
+2026-07-19T17:10:59.1316879Z ##[group]Removing temp folder /home/runner/work/_temp/docker-actions-toolkit-94qebe
+2026-07-19T17:10:59.1318174Z ##[endgroup]
+2026-07-19T17:10:59.1319003Z ##[group]Post cache
+2026-07-19T17:10:59.1319518Z State not set
+2026-07-19T17:10:59.1320344Z ##[endgroup]
+2026-07-19T17:10:59.1494562Z Post job cleanup.
+2026-07-19T17:10:59.3583815Z ##[group]Logout from ghcr.io
+2026-07-19T17:10:59.3650858Z [command]/usr/bin/docker logout ghcr.io
+2026-07-19T17:10:59.3810344Z Removing login credentials for ghcr.io
+2026-07-19T17:10:59.3846177Z ##[endgroup]
+2026-07-19T17:10:59.3847067Z ##[group]Post cache
+2026-07-19T17:10:59.3847563Z State not set
+2026-07-19T17:10:59.3848316Z ##[endgroup]
+2026-07-19T17:10:59.4049989Z Post job cleanup.
+2026-07-19T17:10:59.5813931Z ##[group]Removing builder
+2026-07-19T17:10:59.6948667Z [command]/usr/bin/docker buildx rm builder-a0694a58-2c0a-440f-8c3c-ad2000e59a44
+2026-07-19T17:10:59.8316551Z builder-a0694a58-2c0a-440f-8c3c-ad2000e59a44 removed
+2026-07-19T17:10:59.8350303Z ##[endgroup]
+2026-07-19T17:10:59.8351925Z ##[group]Cleaning up certificates
+2026-07-19T17:10:59.8353798Z ##[endgroup]
+2026-07-19T17:10:59.8354844Z ##[group]Post cache
+2026-07-19T17:10:59.8355849Z State not set
+2026-07-19T17:10:59.8356876Z ##[endgroup]
+2026-07-19T17:10:59.8572626Z Post job cleanup.
+2026-07-19T17:10:59.9433989Z [command]/usr/bin/git version
+2026-07-19T17:10:59.9481775Z git version 2.54.0
+2026-07-19T17:10:59.9520288Z Temporarily overriding HOME='/home/runner/work/_temp/4182b0fa-5c77-468a-95c9-79a9315d0d81' before making global git config changes
+2026-07-19T17:10:59.9521987Z Adding repository directory to the temporary git global config as a safe directory
+2026-07-19T17:10:59.9534904Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/nitu-whatsapp-gateway/nitu-whatsapp-gateway
+2026-07-19T17:10:59.9571967Z Removing SSH command configuration
+2026-07-19T17:10:59.9579346Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-07-19T17:10:59.9615913Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-07-19T17:10:59.9859303Z Removing HTTP extra header
+2026-07-19T17:10:59.9865062Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-07-19T17:10:59.9909177Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-07-19T17:11:00.0177988Z Removing includeIf entries pointing to credentials config files
+2026-07-19T17:11:00.0188056Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-07-19T17:11:00.0224685Z includeif.gitdir:/home/runner/work/nitu-whatsapp-gateway/nitu-whatsapp-gateway/.git.path
+2026-07-19T17:11:00.0226215Z includeif.gitdir:/home/runner/work/nitu-whatsapp-gateway/nitu-whatsapp-gateway/.git/worktrees/*.path
+2026-07-19T17:11:00.0227368Z includeif.gitdir:/github/workspace/.git.path
+2026-07-19T17:11:00.0228301Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-07-19T17:11:00.0234288Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/nitu-whatsapp-gateway/nitu-whatsapp-gateway/.git.path
+2026-07-19T17:11:00.0260844Z /home/runner/work/_temp/git-credentials-487cd6e2-7077-4971-b315-d0646b5bb6c2.config
+2026-07-19T17:11:00.0280413Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/nitu-whatsapp-gateway/nitu-whatsapp-gateway/.git.path /home/runner/work/_temp/git-credentials-487cd6e2-7077-4971-b315-d0646b5bb6c2.config
+2026-07-19T17:11:00.0322888Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/nitu-whatsapp-gateway/nitu-whatsapp-gateway/.git/worktrees/*.path
+2026-07-19T17:11:00.0350197Z /home/runner/work/_temp/git-credentials-487cd6e2-7077-4971-b315-d0646b5bb6c2.config
+2026-07-19T17:11:00.0359903Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/nitu-whatsapp-gateway/nitu-whatsapp-gateway/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-487cd6e2-7077-4971-b315-d0646b5bb6c2.config
+2026-07-19T17:11:00.0404580Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+2026-07-19T17:11:00.0432972Z /github/runner_temp/git-credentials-487cd6e2-7077-4971-b315-d0646b5bb6c2.config
+2026-07-19T17:11:00.0440438Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-487cd6e2-7077-4971-b315-d0646b5bb6c2.config
+2026-07-19T17:11:00.0477458Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-07-19T17:11:00.0503751Z /github/runner_temp/git-credentials-487cd6e2-7077-4971-b315-d0646b5bb6c2.config
+2026-07-19T17:11:00.0510944Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-487cd6e2-7077-4971-b315-d0646b5bb6c2.config
+2026-07-19T17:11:00.0548792Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-07-19T17:11:00.0765298Z Removing credentials config '/home/runner/work/_temp/git-credentials-487cd6e2-7077-4971-b315-d0646b5bb6c2.config'
+2026-07-19T17:11:00.0922578Z Cleaning up orphan processes
