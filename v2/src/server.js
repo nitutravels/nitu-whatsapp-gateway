@@ -3,11 +3,14 @@ import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import config from './config.js';
 import { closeDatabase } from './db.js';
+import { installLiveAuthReconciliation } from './live-auth-reconcile.js';
 import { QueueWorker } from './queue.js';
 import { registerRoutes } from './routes.js';
 import { WebhookWorker } from './webhook.js';
 import { WebsiteWorker } from './website-worker.js';
 import { WhatsAppTransport } from './whatsapp.js';
+
+installLiveAuthReconciliation(WhatsAppTransport);
 
 async function main() {
   const app = Fastify({
