@@ -1,2 +1,2 @@
-Probe requested: 2026-07-19T13:24Z
-Purpose: verify WAHA health and NOWEB session after container startup
+Probe requested: 2026-07-19T13:38Z
+Purpose: verify corrected WAHA entrypoint metadata deployment
