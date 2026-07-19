@@ -1,0 +1,8 @@
+{
+  "engine": "NOWEB",
+  "health_http": "200",
+  "me": null,
+  "name": "nitu-travels",
+  "session_http": "200",
+  "session_status": "SCAN_QR_CODE"
+}
