@@ -1,4 +1,4 @@
-FROM devlikeapro/waha:noweb-2026.7.1
+FROM devlikeapro/waha:noweb-2026.6.2
 
 LABEL org.opencontainers.image.source="https://github.com/nitutravels/nitu-whatsapp-gateway" \
       org.opencontainers.image.description="Nitu Travels WAHA Core NOWEB gateway" \
