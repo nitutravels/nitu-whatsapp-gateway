@@ -1,0 +1,95 @@
+name: Probe WAHA Oracle candidate
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['waha-oracle/PROBE']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nitu-waha-candidate-probe
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: Configure OCI and probe candidate
+        shell: bash
+        env:
+          OCI_PRIVATE_KEY_PEM: ${{ secrets.OCI_PRIVATE_KEY }}
+          OCI_FINGERPRINT_VALUE: ${{ secrets.OCI_FINGERPRINT }}
+          TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
+          CONFIGURED_COMPARTMENT_OCID: ${{ vars.OCI_COMPARTMENT_OCID }}
+          REGION: ${{ vars.OCI_REGION }}
+          DOMAIN: ${{ vars.GATEWAY_DOMAIN || 'wa.nitutravels.in' }}
+          WAHA_API_KEY: ${{ secrets.GATEWAY_API_KEY }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$HOME/.oci" docs
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          value = os.environ.get('OCI_PRIVATE_KEY_PEM', '').strip()
+          if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}: value=value[1:-1]
+          if '\\n' in value and '\n' not in value: value=value.replace('\\r','').replace('\\n','\n')
+          Path.home().joinpath('.oci/key.pem').write_text(value.replace('\r','').strip()+'\n')
+          PY
+          chmod 600 "$HOME/.oci/key.pem"
+          cat > "$HOME/.oci/config" <<EOF
+          [DEFAULT]
+          user=${{ secrets.OCI_USER_OCID }}
+          fingerprint=$(printf '%s' "$OCI_FINGERPRINT_VALUE" | tr -d '[:space:]')
+          tenancy=$TENANCY_OCID
+          region=$REGION
+          key_file=$HOME/.oci/key.pem
+          EOF
+          chmod 600 "$HOME/.oci/config"
+          pipx install --quiet oci-cli
+          export PATH="$HOME/.local/bin:$PATH"
+          compartment="$CONFIGURED_COMPARTMENT_OCID"
+          if [[ ! "$compartment" =~ ^ocid1\.compartment\. ]]; then
+            compartment="$(oci iam compartment list --compartment-id "$TENANCY_OCID" --compartment-id-in-subtree true --access-level ANY --all --output json | jq -r '[.data[]|select(.name=="NituWAGateway" and .["lifecycle-state"]=="ACTIVE")|.id][0]//empty')"
+          fi
+          {
+            echo 'WAHA_CANDIDATE_PROBE_BEGIN'
+            echo "PROBED_AT=$(date -u +%FT%TZ)"
+            candidate_id="$(oci compute instance list --compartment-id "$compartment" --display-name nitu-waha-gateway --all --query 'data[?"lifecycle-state"!=`TERMINATED`].id | [0]' --raw-output)"
+            echo "CANDIDATE_INSTANCE_ID=${candidate_id:-none}"
+            if [[ "$candidate_id" =~ ^ocid1\.instance\. ]]; then
+              state="$(oci compute instance get --instance-id "$candidate_id" --query 'data."lifecycle-state"' --raw-output)"
+              shape="$(oci compute instance get --instance-id "$candidate_id" --query 'data.shape' --raw-output)"
+              echo "CANDIDATE_STATE=$state"
+              echo "CANDIDATE_SHAPE=$shape"
+              vnic="$(oci compute vnic-attachment list --compartment-id "$compartment" --instance-id "$candidate_id" --all --query 'data[?"lifecycle-state"==`ATTACHED`]."vnic-id" | [0]' --raw-output)"
+              ip="$(oci network vnic get --vnic-id "$vnic" --query 'data."public-ip"' --raw-output 2>/dev/null || true)"
+              echo "CANDIDATE_PUBLIC_IP=${ip:-none}"
+              if [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                health="$(curl -sS --connect-timeout 5 --max-time 15 -H "Host: $DOMAIN" -o /tmp/h.json -w '%{http_code}' "http://$ip/health" 2>/dev/null || true)"
+                version="$(curl -sS --connect-timeout 5 --max-time 15 -H "Host: $DOMAIN" -H "X-Api-Key: $WAHA_API_KEY" -o /tmp/v.json -w '%{http_code}' "http://$ip/api/server/version" 2>/dev/null || true)"
+                session="$(curl -sS --connect-timeout 5 --max-time 15 -H "Host: $DOMAIN" -H "X-Api-Key: $WAHA_API_KEY" -o /tmp/s.json -w '%{http_code}' "http://$ip/api/sessions/nitu-travels" 2>/dev/null || true)"
+                echo "HEALTH_HTTP=${health:-000}"
+                echo "VERSION_HTTP=${version:-000}"
+                echo "SESSION_HTTP=${session:-000}"
+                echo "ENGINE=$(jq -r '.engine//"unknown"' /tmp/v.json 2>/dev/null || echo unknown)"
+                echo "SESSION_STATUS=$(jq -r '.status//"UNKNOWN"' /tmp/s.json 2>/dev/null || echo UNKNOWN)"
+              fi
+            fi
+            echo 'WAHA_CANDIDATE_PROBE_END'
+          } | tee docs/waha-candidate-probe.txt
+      - name: Persist probe
+        if: always()
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/waha-candidate-probe.txt
+          git diff --cached --quiet || git commit -m 'Record WAHA candidate probe'
+          git pull --rebase origin main
+          git push origin HEAD:main
