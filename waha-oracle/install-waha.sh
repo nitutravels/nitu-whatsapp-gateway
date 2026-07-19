@@ -59,7 +59,21 @@ rollback() {
 trap rollback ERR
 
 log "Installing WAHA NOWEB on $(uname -m) using $WAHA_IMAGE"
-command -v docker >/dev/null || fail 'Docker is not installed'
+if ! command -v docker >/dev/null 2>&1; then
+  log 'Installing Docker Engine on fresh Oracle instance'
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update
+  apt-get install -y ca-certificates curl gnupg jq
+  install -m 0755 -d /etc/apt/keyrings
+  curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+  chmod a+r /etc/apt/keyrings/docker.asc
+  . /etc/os-release
+  echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $VERSION_CODENAME stable" > /etc/apt/sources.list.d/docker.list
+  apt-get update
+  apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  systemctl enable --now docker
+fi
+command -v jq >/dev/null 2>&1 || { apt-get update && apt-get install -y jq; }
 docker compose version >/dev/null || fail 'Docker Compose plugin is not installed'
 
 for unit in nitu-wa-config-sync.timer nitu-wa-update.timer nitu-wa-backup.timer; do
@@ -102,6 +116,10 @@ EOF
 chmod 0600 "$ROOT/.env"
 
 cat > "$ROOT/Caddyfile" <<'CADDY'
+http://{$WAHA_DOMAIN} {
+  reverse_proxy waha:3000
+}
+
 {$WAHA_DOMAIN} {
   encode zstd gzip
   reverse_proxy waha:3000
