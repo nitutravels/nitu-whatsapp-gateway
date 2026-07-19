@@ -36,7 +36,14 @@ export function createSqliteAuthState() {
 
   return {
     state: { creds, keys },
-    saveCreds: async () => authSet('creds', 'primary', serialize(creds)),
+    saveCreds: async update => {
+      // Baileys emits a partial AuthenticationCreds update. A database-backed
+      // adapter must merge that payload before persisting; serializing only the
+      // original object can leave `registered`, `me` and device identity stale.
+      if (update && typeof update === 'object') Object.assign(creds, update);
+      authSet('creds', 'primary', serialize(creds));
+      return creds;
+    },
     clear: async () => authClear()
   };
 }
