@@ -1,27 +1,31 @@
-name: Inspect post-reset OCI guest control paths
+name: Repair WAHA host through OCI Bastion
 
 on:
   pull_request:
     branches: [main]
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: post-reset-oci-control-paths
+  group: repair-waha-through-oci-bastion
   cancel-in-progress: true
 
 jobs:
-  inspect:
+  repair:
     runs-on: ubuntu-latest
     environment: production
-    timeout-minutes: 10
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
 
-      - name: Query OCI instance and Cloud Agent once
+      - name: Restore validated Bastion repair script
+        run: git show 2acde60d0a77b486a4e51273b0c87001516f714a:scripts/official-mcp-bastion-deploy.py > /tmp/official-mcp-bastion-deploy.py
+
+      - name: Configure OCI profile
         shell: bash
         env:
           KEY: ${{ secrets.OCI_PRIVATE_KEY }}
@@ -29,57 +33,44 @@ jobs:
           USER_OCID: ${{ secrets.OCI_USER_OCID }}
           TENANCY: ${{ secrets.OCI_TENANCY_OCID }}
           REGION: ${{ vars.OCI_REGION }}
-          COMPARTMENT: ${{ vars.OCI_COMPARTMENT_OCID }}
-          OCI_CONFIG_PROFILE: DEFAULT
-          FASTMCP_LOG_LEVEL: ERROR
         run: |
           set -Eeuo pipefail
-          mkdir -p ~/.oci docs
+          mkdir -p ~/.oci
           python -c 'import os,pathlib;v=os.environ["KEY"].strip().strip("\"\047").replace("\\r","").replace("\\n","\n");pathlib.Path.home().joinpath(".oci/key.pem").write_text(v.strip()+"\n")'
           chmod 600 ~/.oci/key.pem
           printf '[DEFAULT]\nuser=%s\nfingerprint=%s\ntenancy=%s\nregion=%s\nkey_file=%s/.oci/key.pem\n' "$USER_OCID" "$(echo "$FP"|tr -d '[:space:]')" "$TENANCY" "$REGION" "$HOME" > ~/.oci/config
           chmod 600 ~/.oci/config
           pipx install --quiet uv
-          uv run --with 'mcp>=1.0' python - <<'PY'
-          import asyncio,base64,json,os
-          from mcp import ClientSession,StdioServerParameters
-          from mcp.client.stdio import stdio_client
-          def dec(r):
-              t=''.join(getattr(x,'text','') for x in r.content).strip();a=t.find('{');b=t.rfind('}')
-              if a>=0 and b>a:t=t[a:b+1]
-              return json.loads(t)
-          async def inv(s,c,o,p,f=None,m=None):
-              a={'client_fqn':c,'operation':o,'params':p,'result_mode':'full'}
-              if f:a['fields']=f
-              if m:a['max_results']=m
-              r=await s.call_tool('invoke_oci_api',a)
-              if getattr(r,'isError',False):raise RuntimeError(''.join(getattr(x,'text','') for x in r.content))
-              return dec(r)
-          def items(x):
-              d=x.get('data',[]);return d.get('items',d.get('results',[])) if isinstance(d,dict) else d
-          async def main():
-              comp=os.environ['COMPARTMENT'];out={}
-              server=StdioServerParameters(command='uvx',args=['oracle.oci-cloud-mcp-server@latest'],env={**os.environ,'OCI_CONFIG_PROFILE':'DEFAULT','FASTMCP_LOG_LEVEL':'ERROR'})
-              async with stdio_client(server) as (r,w):
-                async with ClientSession(r,w) as s:
-                  await s.initialize();ls=await inv(s,'oci.core.ComputeClient','list_instances',{'compartment_id':comp},['id','display_name','lifecycle_state','shape'],20)
-                  t=next(x for x in items(ls) if x.get('display_name')=='nitu-whatsapp-gateway' and x.get('lifecycle_state')!='TERMINATED');iid=t['id']
-                  out.update({'instance_id':iid,'shape':t.get('shape'),'lifecycle_state':t.get('lifecycle_state')})
-                  ins=await inv(s,'oci.core.ComputeClient','get_instance',{'instance_id':iid},['metadata','agent_config']);d=ins.get('data') or {};out['agent_config']=d.get('agent_config')
-                  try:
-                    env=base64.b64decode((d.get('metadata') or {}).get('gateway_env_b64','')).decode();out['pinned_image']=next((x.split('=',1)[1] for x in env.splitlines() if x.startswith('GATEWAY_IMAGE=')),None)
-                  except Exception as e:out['metadata_error']=str(e)
-                  try:
-                    ps=await inv(s,'oci.compute_instance_agent.PluginClient','list_instance_agent_plugins',{'compartment_id':comp,'instanceagent_id':iid},['name','status'],100);out['plugins']=items(ps)
-                  except Exception as e:out['plugin_error']=str(e)[:2000]
-              json.dump(out,open('docs/post-reset-control-paths.json','w'),indent=2,sort_keys=True)
-          asyncio.run(main())
-          PY
 
-      - name: Persist result
+      - name: Enter the VM through managed OCI Bastion and repair Docker
+        shell: bash
+        env:
+          COMPARTMENT_OCID: ${{ vars.OCI_COMPARTMENT_OCID }}
+          TARGET_IMAGE: ghcr.io/nitutravels/nitu-whatsapp-gateway:recovery-29694728675
+          OCI_REGION: ${{ vars.OCI_REGION }}
+          OCI_CONFIG_PROFILE: DEFAULT
+          FASTMCP_LOG_LEVEL: ERROR
         run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '4189826+github-actions[bot]@users.noreply.github.com'
-          git add docs/post-reset-control-paths.json
-          git diff --cached --quiet || git commit -m 'Record post-reset OCI control paths'
-          git push origin HEAD:${{ github.event.pull_request.head.ref }}
+          set -Eeuo pipefail
+          uv run --with 'mcp>=1.0' python /tmp/official-mcp-bastion-deploy.py
+
+      - name: Verify WAHA once after host repair
+        shell: bash
+        env:
+          DOMAIN: ${{ vars.GATEWAY_DOMAIN || 'wa.nitutravels.in' }}
+          API_KEY: ${{ secrets.GATEWAY_API_KEY }}
+        run: |
+          set -Eeuo pipefail
+          health="$(curl -sS --connect-timeout 10 --max-time 30 -o /tmp/health -w '%{http_code}' "https://$DOMAIN/health" || true)"
+          session="$(curl -sS --connect-timeout 10 --max-time 30 -H "X-Api-Key: $API_KEY" -o /tmp/session -w '%{http_code}' "https://$DOMAIN/api/sessions/nitu-travels" || true)"
+          echo "HEALTH_HTTP=$health SESSION_HTTP=$session"
+          if [ "$health" = 200 ] && [ "$session" = 404 ]; then
+            curl -sS -H "X-Api-Key: $API_KEY" -H 'Content-Type: application/json' -X POST --data '{"name":"nitu-travels"}' "https://$DOMAIN/api/sessions" >/dev/null
+            sleep 15
+            session="$(curl -sS -H "X-Api-Key: $API_KEY" -o /tmp/session -w '%{http_code}' "https://$DOMAIN/api/sessions/nitu-travels")"
+          fi
+          status="$(jq -r '.status // "unknown"' /tmp/session 2>/dev/null || echo unknown)"
+          echo "WAHA_SESSION_STATUS=$status"
+          test "$health" = 200
+          test "$session" = 200
+          case "$status" in WORKING|SCAN_QR_CODE|PASSKEY_REQUIRED|PASSKEY_CONFIRMATION_REQUIRED) exit 0;; *) cat /tmp/session; exit 1;; esac
