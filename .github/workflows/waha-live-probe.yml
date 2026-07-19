@@ -1,4 +1,4 @@
-name: Verify WAHA ARM64 Oracle deployment
+name: Final WAHA ARM64 install through official Oracle OCI MCP
 on:
   pull_request:
     branches: [main]
@@ -8,15 +8,15 @@ concurrency:
   group: verify-waha-arm64-oracle
   cancel-in-progress: true
 jobs:
-  verify:
+  install:
     runs-on: ubuntu-latest
     environment: production
-    timeout-minutes: 30
+    timeout-minutes: 28
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.ref }}
-      - name: Resolve Oracle state through official OCI MCP
+      - name: Pin known-good ARM64 image through official OCI MCP
         shell: bash
         env:
           KEY: ${{ secrets.OCI_PRIVATE_KEY }}
@@ -25,6 +25,7 @@ jobs:
           TENANCY: ${{ secrets.OCI_TENANCY_OCID }}
           REGION: ${{ vars.OCI_REGION }}
           COMPARTMENT: ${{ vars.OCI_COMPARTMENT_OCID }}
+          TARGET_IMAGE: ghcr.io/nitutravels/nitu-whatsapp-gateway:official-mcp-waha-20260719
           OCI_CONFIG_PROFILE: DEFAULT
           FASTMCP_LOG_LEVEL: ERROR
         run: |
@@ -36,7 +37,7 @@ jobs:
           chmod 600 ~/.oci/config
           pipx install --quiet uv
           uv run --with 'mcp>=1.0' python - <<'PY'
-          import asyncio,base64,json,os
+          import asyncio,base64,json,os,re
           from mcp import ClientSession,StdioServerParameters
           from mcp.client.stdio import stdio_client
           def dec(r):
@@ -53,48 +54,43 @@ jobs:
           def items(x):
               d=x.get('data',[]);return d.get('items',d.get('results',[])) if isinstance(d,dict) else d
           async def main():
-              comp=os.environ['COMPARTMENT'];out={}
+              comp=os.environ['COMPARTMENT'];image=os.environ['TARGET_IMAGE'];out={'target_image':image}
               server=StdioServerParameters(command='uvx',args=['oracle.oci-cloud-mcp-server@latest'],env={**os.environ,'OCI_CONFIG_PROFILE':'DEFAULT','FASTMCP_LOG_LEVEL':'ERROR'})
               async with stdio_client(server) as (r,w):
                 async with ClientSession(r,w) as s:
                   await s.initialize();ls=await inv(s,'oci.core.ComputeClient','list_instances',{'compartment_id':comp},['id','display_name','lifecycle_state'],20)
-                  t=next(x for x in items(ls) if x.get('display_name')=='nitu-whatsapp-gateway' and x.get('lifecycle_state')!='TERMINATED');iid=t['id']
-                  ins=await inv(s,'oci.core.ComputeClient','get_instance',{'instance_id':iid},['lifecycle_state','metadata']);d=ins.get('data') or {};out['lifecycle_state']=d.get('lifecycle_state')
-                  env=base64.b64decode((d.get('metadata') or {}).get('gateway_env_b64','')).decode();out['pinned_image']=next((x.split('=',1)[1] for x in env.splitlines() if x.startswith('GATEWAY_IMAGE=')),None)
+                  t=next(x for x in items(ls) if x.get('display_name')=='nitu-whatsapp-gateway' and x.get('lifecycle_state')!='TERMINATED');iid=t['id'];out['instance_id']=iid
+                  ins=await inv(s,'oci.core.ComputeClient','get_instance',{'instance_id':iid},['lifecycle_state','metadata']);d=ins.get('data') or {};out['lifecycle_state']=d.get('lifecycle_state');md=dict(d.get('metadata') or {})
+                  enc=md.get('gateway_env_b64');
+                  if not enc:raise RuntimeError('gateway_env_b64 metadata missing')
+                  text=base64.b64decode(enc).decode();text=re.sub(r'^GATEWAY_IMAGE=.*$',f'GATEWAY_IMAGE={image}',text,flags=re.M) if re.search(r'^GATEWAY_IMAGE=.*$',text,flags=re.M) else f'GATEWAY_IMAGE={image}\n'+text;md['gateway_env_b64']=base64.b64encode(text.encode()).decode()
+                  await inv(s,'oci.core.ComputeClient','update_instance',{'instance_id':iid,'update_instance_details':{'metadata':md}},['lifecycle_state'])
                   vas=await inv(s,'oci.core.ComputeClient','list_vnic_attachments',{'compartment_id':comp,'instance_id':iid},['vnic_id','lifecycle_state'],10);va=next(x for x in items(vas) if x.get('lifecycle_state')=='ATTACHED')
                   vr=await inv(s,'oci.core.VirtualNetworkClient','get_vnic',{'vnic_id':va['vnic_id']},['public_ip']);out['public_ip']=(vr.get('data') or {}).get('public_ip')
-              open('/tmp/oracle-state.json','w').write(json.dumps(out));open('/tmp/oracle-ip','w').write(out['public_ip'])
+              json.dump(out,open('/tmp/oracle.json','w'));open('/tmp/ip','w').write(out['public_ip'])
           asyncio.run(main())
           PY
-      - name: Wait for WAHA health and session
+      - name: Wait for no-reboot host sync and initialize session
         shell: bash
         env:
           DOMAIN: ${{ vars.GATEWAY_DOMAIN || 'wa.nitutravels.in' }}
           API_KEY: ${{ secrets.GATEWAY_API_KEY }}
         run: |
           set -u
-          ip="$(cat /tmp/oracle-ip)"; c=(--silent --show-error --connect-timeout 8 --max-time 25 --resolve "$DOMAIN:443:$ip")
-          h=000; s=000; status=unknown; body='{}'
+          ip="$(cat /tmp/ip)";c=(--silent --show-error --connect-timeout 8 --max-time 25 --resolve "$DOMAIN:443:$ip");h=000;s=000;status=unknown;body='{}'
           for a in $(seq 1 120); do
-            h="$(curl "${c[@]}" -o /tmp/h -w '%{http_code}' "https://$DOMAIN/health" 2>/dev/null||true)"
-            s="$(curl "${c[@]}" -H "X-Api-Key: $API_KEY" -o /tmp/s -w '%{http_code}' "https://$DOMAIN/api/sessions/nitu-travels" 2>/dev/null||true)"
-            status="$(jq -r '.status // "unknown"' /tmp/s 2>/dev/null||echo unknown)"
-            echo "ATTEMPT=$a HEALTH=$h SESSION=$s STATUS=$status"
-            if [ "$h" = 200 ] && [ "$s" = 404 ]; then curl "${c[@]}" -H "X-Api-Key: $API_KEY" -H 'Content-Type: application/json' -X POST --data '{"name":"nitu-travels"}' "https://$DOMAIN/api/sessions" >/dev/null 2>&1||true; fi
-            if [ "$s" = 200 ]; then
-              case "$status" in WORKING|SCAN_QR_CODE|PASSKEY_REQUIRED|PASSKEY_CONFIRMATION_REQUIRED) body="$(cat /tmp/s)";break;; STOPPED) curl "${c[@]}" -H "X-Api-Key: $API_KEY" -H 'Content-Type: application/json' -X POST --data '{}' "https://$DOMAIN/api/sessions/nitu-travels/start" >/dev/null 2>&1||true;; esac
-            fi
+            h="$(curl "${c[@]}" -o /tmp/h -w '%{http_code}' "https://$DOMAIN/health" 2>/dev/null||true)";s="$(curl "${c[@]}" -H "X-Api-Key: $API_KEY" -o /tmp/s -w '%{http_code}' "https://$DOMAIN/api/sessions/nitu-travels" 2>/dev/null||true)";status="$(jq -r '.status // "unknown"' /tmp/s 2>/dev/null||echo unknown)";echo "ATTEMPT=$a HEALTH=$h SESSION=$s STATUS=$status"
+            if [ "$h" = 200 ] && [ "$s" = 404 ];then curl "${c[@]}" -H "X-Api-Key: $API_KEY" -H 'Content-Type: application/json' -X POST --data '{"name":"nitu-travels"}' "https://$DOMAIN/api/sessions" >/dev/null 2>&1||true;fi
+            if [ "$s" = 200 ];then case "$status" in WORKING|SCAN_QR_CODE|PASSKEY_REQUIRED|PASSKEY_CONFIRMATION_REQUIRED) body="$(cat /tmp/s)";break;;STOPPED) curl "${c[@]}" -H "X-Api-Key: $API_KEY" -H 'Content-Type: application/json' -X POST --data '{}' "https://$DOMAIN/api/sessions/nitu-travels/start" >/dev/null 2>&1||true;;FAILED) curl "${c[@]}" -H "X-Api-Key: $API_KEY" -H 'Content-Type: application/json' -X POST --data '{}' "https://$DOMAIN/api/sessions/nitu-travels/restart" >/dev/null 2>&1||true;;esac;fi
             sleep 10
           done
           python - "$h" "$s" "$status" "$body" <<'PY'
           import json,sys
-          state=json.load(open('/tmp/oracle-state.json'));body={}
-          try:body=json.loads(sys.argv[4])
+          x=json.load(open('/tmp/oracle.json'));b={}
+          try:b=json.loads(sys.argv[4])
           except:pass
-          state.update({'health_http':sys.argv[1],'session_http':sys.argv[2],'session_status':sys.argv[3],'engine':((body.get('engine') or {}).get('engine') if isinstance(body.get('engine'),dict) else body.get('engine')),'me':body.get('me')})
-          json.dump(state,open('docs/waha-production-verification.json','w'),indent=2,sort_keys=True)
+          x.update({'health_http':sys.argv[1],'session_http':sys.argv[2],'session_status':sys.argv[3],'engine':((b.get('engine') or {}).get('engine') if isinstance(b.get('engine'),dict) else b.get('engine')),'me':b.get('me')});json.dump(x,open('docs/waha-final-installation.json','w'),indent=2,sort_keys=True)
           PY
-      - name: Persist result
+      - name: Persist installation result
         run: |
-          git config user.name 'github-actions[bot]';git config user.email '4189826+github-actions[bot]@users.noreply.github.com'
-          git add docs/waha-production-verification.json;git diff --cached --quiet||git commit -m 'Record WAHA ARM64 production verification';git push origin HEAD:${{ github.event.pull_request.head.ref }}
+          git config user.name 'github-actions[bot]';git config user.email '4189826+github-actions[bot]@users.noreply.github.com';git add docs/waha-final-installation.json;git diff --cached --quiet||git commit -m 'Record final WAHA Oracle installation';git push origin HEAD:${{ github.event.pull_request.head.ref }}
