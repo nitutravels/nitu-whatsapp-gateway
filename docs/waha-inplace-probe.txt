@@ -1,7 +1,7 @@
 WAHA_INPLACE_PROBE_BEGIN
-PROBED_AT=2026-07-19T12:33:08Z
+PROBED_AT=2026-07-19T12:37:27Z
 INSTANCE_ID=ocid1.instance.oc1.ap-mumbai-1.anrg6ljr724yghqc4d6hgbco7f5bbllsi6wfqjxlgust5idcqcrcouf2kmoq
-INSTANCE_STATE=STOPPED
+INSTANCE_STATE=RUNNING
 INSTANCE_IMAGE=ocid1.image.oc1.ap-mumbai-1.aaaaaaaafosoehxawhzdbpie7m5p2i652dkpiesgkxhopeywtc4qw3lvtqpq
 ATTACHED_BOOT_VOLUME=ocid1.bootvolume.oc1.ap-mumbai-1.abrg6ljr2jrq3fofkpzmle2repa54wypgykt3y3oyulb45cjg3pyjp3yrifa
 PUBLIC_IP=137.23.58.166
