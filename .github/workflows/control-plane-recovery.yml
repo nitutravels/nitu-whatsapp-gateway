@@ -1,4 +1,4 @@
-name: Control-plane WhatsApp recovery
+name: Install WAHA on Oracle
 
 on:
   workflow_dispatch:
@@ -10,15 +10,15 @@ permissions:
   packages: read
 
 concurrency:
-  group: nitu-whatsapp-control-plane-recovery
+  group: nitu-whatsapp-waha-install
   cancel-in-progress: false
 
 jobs:
-  recover:
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[deploy]')
+  install:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[waha-deploy]')
     runs-on: ubuntu-latest
     environment: production
-    timeout-minutes: 55
+    timeout-minutes: 60
 
     steps:
       - uses: actions/checkout@v7
@@ -67,28 +67,34 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq dnsutils
 
-      - name: Deploy Baileys v2 through OCI control plane
+      - name: Install WAHA Core NOWEB through OCI control plane
         shell: bash
         env:
           COMPARTMENT_OCID: ${{ vars.OCI_COMPARTMENT_OCID }}
           DOMAIN: ${{ vars.GATEWAY_DOMAIN || 'wa.nitutravels.in' }}
-          ADMIN_TOKEN: ${{ secrets.GATEWAY_ADMIN_TOKEN }}
+          API_KEY: ${{ secrets.GATEWAY_API_KEY }}
           IMAGE: ghcr.io/${{ github.repository }}:${{ github.sha }}
+          SESSION_NAME: nitu-travels
         run: |
           set -Eeuo pipefail
           mkdir -p docs
-          chmod 0755 scripts/deploy-baileys-v2.sh
-          scripts/deploy-baileys-v2.sh 2>&1 | tee docs/baileys-v2-deployment-result.txt
+          chmod 0755 scripts/deploy-waha.sh
+          scripts/deploy-waha.sh 2>&1 | tee docs/waha-deployment-result.txt
 
-      - name: Persist deployment result
+      - name: Persist sanitized deployment result
         if: always()
         shell: bash
         run: |
           set -Eeuo pipefail
-          test -f docs/baileys-v2-deployment-result.txt || \
-            echo 'Deployment did not produce a result file.' > docs/baileys-v2-deployment-result.txt
+          test -f docs/waha-deployment-result.txt || \
+            echo 'WAHA installation did not produce a result file.' > docs/waha-deployment-result.txt
           git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add docs/baileys-v2-deployment-result.txt
-          git diff --cached --quiet || git commit -m 'Record Baileys v2 deployment result'
-          git push origin HEAD:main
+          git config user.email '4189826+github-actions[bot]@users.noreply.github.com'
+          git add docs/waha-deployment-result.txt
+          git diff --cached --quiet || git commit -m 'Record WAHA Oracle installation result'
+          for attempt in 1 2 3 4 5; do
+            git pull --rebase origin main && git push origin HEAD:main && exit 0
+            sleep $((attempt * 5))
+          done
+          echo 'Could not persist result to main; installation logs remain in this workflow.' >&2
+          exit 1
