@@ -44,6 +44,7 @@ async function main() {
 
   const transport = new WhatsAppTransport(app.log);
   const queueWorker = new QueueWorker(transport, app.log);
+  transport.attachQueueWorker?.(queueWorker);
   const webhookWorker = new WebhookWorker(app.log);
   const websiteWorker = new WebsiteWorker(app.log);
   await registerRoutes(app, transport, queueWorker);
