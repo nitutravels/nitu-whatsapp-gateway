@@ -11,6 +11,10 @@ on:
       - 'docker/nitu-waha-supervisor.mjs'
       - 'scripts/deploy-waha.sh'
       - 'waha-oracle/METADATA-DEPLOY'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'waha-oracle/METADATA-DEPLOY-PR'
 
 permissions:
   contents: write
@@ -170,6 +174,10 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add docs/waha-metadata-deploy-result.txt
           git diff --cached --quiet || git commit -m 'Record WAHA metadata deployment result'
+          if [ "${GITHUB_EVENT_NAME}" = pull_request ]; then
+            echo 'Pull-request run: result remains available in Actions logs.'
+            exit 0
+          fi
           for attempt in 1 2 3 4 5; do
             git pull --rebase origin main && git push origin HEAD:main && exit 0
             sleep $((attempt * 5))
