@@ -8,6 +8,8 @@ const schema = z.object({
   ADMIN_TOKEN: z.string().min(32),
   WEBHOOK_URL: z.string().url().or(z.literal('')).default(''),
   WEBHOOK_SECRET: z.string().min(32),
+  WEBSITE_WORKER_URL: z.string().url().or(z.literal('')).default(''),
+  WEBSITE_WORKER_INTERVAL_MS: z.coerce.number().int().min(60000).max(900000).default(60000),
   AUTH_ENCRYPTION_KEY: z.string().min(32).optional(),
   DEFAULT_COUNTRY_CODE: z.string().regex(/^\d{1,4}$/).default('91'),
   SEND_INTERVAL_MS: z.coerce.number().int().min(2000).max(600000).default(6000),
