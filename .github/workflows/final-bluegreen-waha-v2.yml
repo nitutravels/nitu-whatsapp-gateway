@@ -1,0 +1,160 @@
+name: Corrected final blue-green WAHA Oracle installation
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'waha-oracle/BLUEGREEN-FINAL-V2'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nitu-waha-existing-vm-install
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Configure OCI CLI
+        shell: bash
+        env:
+          OCI_PRIVATE_KEY_PEM: ${{ secrets.OCI_PRIVATE_KEY }}
+          OCI_FINGERPRINT_VALUE: ${{ secrets.OCI_FINGERPRINT }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$HOME/.oci"
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          value=os.environ.get('OCI_PRIVATE_KEY_PEM','').strip()
+          if len(value)>=2 and value[0]==value[-1] and value[0] in {'"',"'"}: value=value[1:-1]
+          if '\\n' in value and '\n' not in value: value=value.replace('\\r','').replace('\\n','\n')
+          Path.home().joinpath('.oci/key.pem').write_text(value.replace('\r','').strip()+'\n')
+          PY
+          chmod 600 "$HOME/.oci/key.pem"
+          cat > "$HOME/.oci/config" <<EOF
+          [DEFAULT]
+          user=${{ secrets.OCI_USER_OCID }}
+          fingerprint=$(printf '%s' "$OCI_FINGERPRINT_VALUE" | tr -d '[:space:]')
+          tenancy=${{ secrets.OCI_TENANCY_OCID }}
+          region=${{ vars.OCI_REGION }}
+          key_file=$HOME/.oci/key.pem
+          EOF
+          chmod 600 "$HOME/.oci/config"
+          pipx install --quiet oci-cli
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Resolve OCI resources and create private bootstrap
+        id: prepare
+        shell: bash
+        env:
+          TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
+          CONFIGURED_COMPARTMENT_OCID: ${{ vars.OCI_COMPARTMENT_OCID }}
+          CONFIGURED_NAMESPACE: ${{ vars.OCI_NAMESPACE }}
+          STATE_BUCKET: ${{ vars.OCI_TF_STATE_BUCKET }}
+          REGION: ${{ vars.OCI_REGION }}
+          WAHA_API_KEY: ${{ secrets.GATEWAY_API_KEY }}
+          WAHA_DASHBOARD_PASSWORD: ${{ secrets.GATEWAY_ADMIN_TOKEN }}
+          WAHA_WEBHOOK_SECRET: ${{ secrets.GATEWAY_WEBHOOK_SECRET }}
+          WAHA_WORKER_KEY: ${{ secrets.GATEWAY_API_KEY }}
+          WAHA_DOMAIN: ${{ vars.GATEWAY_DOMAIN || 'wa.nitutravels.in' }}
+        run: |
+          set -Eeuo pipefail
+          compartment="$CONFIGURED_COMPARTMENT_OCID"
+          if [[ ! "$compartment" =~ ^ocid1\.compartment\. ]]; then
+            compartment="$(oci iam compartment list \
+              --compartment-id "$TENANCY_OCID" \
+              --compartment-id-in-subtree true \
+              --access-level ANY --all --output json | \
+              jq -r '[.data[]|select(.name=="NituWAGateway" and .["lifecycle-state"]=="ACTIVE")|.id][0]//empty')"
+          fi
+          [[ "$compartment" =~ ^ocid1\.compartment\. ]]
+
+          namespace="$CONFIGURED_NAMESPACE"
+          if [ -z "$namespace" ] || [ "$namespace" = null ]; then
+            namespace="$(oci os ns get --query data --raw-output)"
+          fi
+          [ -n "$namespace" ]
+          [ -n "$STATE_BUCKET" ]
+
+          installer_object="waha/v2-installer-${GITHUB_SHA}.sh"
+          oci os object put \
+            --namespace-name "$namespace" \
+            --bucket-name "$STATE_BUCKET" \
+            --name "$installer_object" \
+            --file waha-oracle/install-waha.sh --force >/dev/null
+          expires="$(date -u -d '+4 hours' '+%Y-%m-%dT%H:%M:%SZ')"
+          installer_uri="$(oci os preauth-request create \
+            --namespace-name "$namespace" \
+            --bucket-name "$STATE_BUCKET" \
+            --name "waha-v2-installer-${GITHUB_RUN_ID}" \
+            --access-type ObjectRead \
+            --object-name "$installer_object" \
+            --time-expires "$expires" \
+            --query 'data."access-uri"' --raw-output)"
+          installer_url="https://objectstorage.${REGION}.oraclecloud.com${installer_uri}"
+
+          api_b64="$(printf '%s' "$WAHA_API_KEY" | base64 -w0)"
+          dashboard_b64="$(printf '%s' "$WAHA_DASHBOARD_PASSWORD" | base64 -w0)"
+          webhook_b64="$(printf '%s' "$WAHA_WEBHOOK_SECRET" | base64 -w0)"
+          worker_b64="$(printf '%s' "$WAHA_WORKER_KEY" | base64 -w0)"
+
+          cat > /tmp/bootstrap.sh <<EOF
+          #!/usr/bin/env bash
+          set -Eeuo pipefail
+          umask 077
+          curl -fsSL '$installer_url' -o /root/install-waha.sh
+          chmod 700 /root/install-waha.sh
+          WAHA_API_KEY_B64='$api_b64' \
+          WAHA_DASHBOARD_PASSWORD_B64='$dashboard_b64' \
+          WAHA_WEBHOOK_SECRET_B64='$webhook_b64' \
+          WAHA_WORKER_KEY_B64='$worker_b64' \
+          WAHA_DOMAIN='$WAHA_DOMAIN' \
+          /root/install-waha.sh
+          EOF
+          chmod 600 /tmp/bootstrap.sh
+
+          bootstrap_object="waha/v2-bootstrap-${GITHUB_RUN_ID}.sh"
+          oci os object put \
+            --namespace-name "$namespace" \
+            --bucket-name "$STATE_BUCKET" \
+            --name "$bootstrap_object" \
+            --file /tmp/bootstrap.sh --force >/dev/null
+          bootstrap_uri="$(oci os preauth-request create \
+            --namespace-name "$namespace" \
+            --bucket-name "$STATE_BUCKET" \
+            --name "waha-v2-bootstrap-${GITHUB_RUN_ID}" \
+            --access-type ObjectRead \
+            --object-name "$bootstrap_object" \
+            --time-expires "$expires" \
+            --query 'data."access-uri"' --raw-output)"
+
+          echo "compartment=$compartment" >> "$GITHUB_OUTPUT"
+          echo "bootstrap_url=https://objectstorage.${REGION}.oraclecloud.com${bootstrap_uri}" >> "$GITHUB_OUTPUT"
+
+      - name: Launch, verify and cut over corrected candidate
+        shell: bash
+        env:
+          COMPARTMENT_OCID: ${{ steps.prepare.outputs.compartment }}
+          BOOTSTRAP_URL: ${{ steps.prepare.outputs.bootstrap_url }}
+          DOMAIN: ${{ vars.GATEWAY_DOMAIN || 'wa.nitutravels.in' }}
+          WAHA_API_KEY: ${{ secrets.GATEWAY_API_KEY }}
+          RESULT_FILE: docs/final-bluegreen-waha-v2-result.txt
+        run: |
+          chmod 0755 scripts/final-bluegreen-waha-v2.sh
+          scripts/final-bluegreen-waha-v2.sh
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: final-bluegreen-waha-v2-result
+          path: docs/final-bluegreen-waha-v2-result.txt
+          if-no-files-found: warn
+          retention-days: 2
