@@ -1,27 +1,46 @@
-name: Probe WAHA production
+name: Install and verify WAHA production
+
 on:
   pull_request:
     branches: [main]
-permissions: {contents: read, packages: read}
+
+permissions:
+  contents: read
+  packages: read
+
 jobs:
-  probe:
+  install:
     runs-on: ubuntu-latest
     environment: production
-    timeout-minutes: 15
+    timeout-minutes: 45
     steps:
-      - name: Probe
+      - uses: actions/checkout@v7
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Configure OCI
         env:
           KEY: ${{ secrets.OCI_PRIVATE_KEY }}
           FP: ${{ secrets.OCI_FINGERPRINT }}
-          USER: ${{ secrets.OCI_USER_OCID }}
+          USER_OCID: ${{ secrets.OCI_USER_OCID }}
           TENANCY: ${{ secrets.OCI_TENANCY_OCID }}
           REGION: ${{ vars.OCI_REGION }}
-          COMP: ${{ vars.OCI_COMPARTMENT_OCID }}
-          DOMAIN: ${{ vars.GATEWAY_DOMAIN || 'wa.nitutravels.in' }}
-          API: ${{ secrets.GATEWAY_API_KEY }}
         run: |
-          mkdir -p ~/.oci; python -c 'import os,pathlib;v=os.environ["KEY"].strip().strip("\"'\''").replace("\\r","").replace("\\n","\n");pathlib.Path.home().joinpath(".oci/key.pem").write_text(v.strip()+"\n")'; chmod 600 ~/.oci/key.pem
-          printf '[DEFAULT]\nuser=%s\nfingerprint=%s\ntenancy=%s\nregion=%s\nkey_file=%s/.oci/key.pem\n' "$USER" "$(echo "$FP"|tr -d '[:space:]')" "$TENANCY" "$REGION" "$HOME" > ~/.oci/config; chmod 600 ~/.oci/config; pipx install --quiet oci-cli >/dev/null 2>&1
-          I=$(oci compute instance list --compartment-id "$COMP" --display-name nitu-whatsapp-gateway --all --query 'data[?"lifecycle-state"!=`TERMINATED`].id|[0]' --raw-output); L=$(oci compute instance get --instance-id "$I" --query 'data."lifecycle-state"' --raw-output); V=$(oci compute vnic-attachment list --compartment-id "$COMP" --instance-id "$I" --all --query 'data[?"lifecycle-state"==`ATTACHED`]."vnic-id"|[0]' --raw-output); P=$(oci network vnic get --vnic-id "$V" --query 'data."public-ip"' --raw-output)
-          B=$(oci compute instance get --instance-id "$I" --query 'data.metadata.gateway_env_b64' --raw-output); IMG=$(printf %s "$B"|base64 -d 2>/dev/null|sed -n 's/^GATEWAY_IMAGE=//p'|head -1); echo "INSTANCE=$L IP=$P IMAGE=$IMG"
-          C=(--silent --show-error --connect-timeout 8 --max-time 20 --resolve "$DOMAIN:443:$P"); H=$(curl "${C[@]}" -o /tmp/h -w '%{http_code}' "https://$DOMAIN/health" 2>/tmp/he||true); S=$(curl "${C[@]}" -H "X-Api-Key: $API" -o /tmp/s -w '%{http_code}' "https://$DOMAIN/api/sessions/nitu-travels" 2>/tmp/se||true); echo "HEALTH=$H SESSION=$S"; [ -s /tmp/he ]&&{ echo -n 'HEALTH_ERROR=';cat /tmp/he;}; [ -s /tmp/se ]&&{ echo -n 'SESSION_ERROR=';cat /tmp/se;}; [ -s /tmp/h ]&&{ echo -n ' HEALTH_BODY=';jq -c '{status,services}' /tmp/h 2>/dev/null||head -c 300 /tmp/h;}; [ -s /tmp/s ]&&{ echo -n ' SESSION_BODY=';jq -c '{name,status,engine:(.engine.engine//.engine.name),me:(if .me then {id:.me.id,pushName:.me.pushName} else null end)}' /tmp/s 2>/dev/null||head -c 500 /tmp/s;}; echo
+          mkdir -p ~/.oci
+          python -c 'import os,pathlib;v=os.environ["KEY"].strip().strip("\"'\''").replace("\\r","").replace("\\n","\n");pathlib.Path.home().joinpath(".oci/key.pem").write_text(v.strip()+"\n")'
+          chmod 600 ~/.oci/key.pem
+          printf '[DEFAULT]\nuser=%s\nfingerprint=%s\ntenancy=%s\nregion=%s\nkey_file=%s/.oci/key.pem\n' "$USER_OCID" "$(echo "$FP"|tr -d '[:space:]')" "$TENANCY" "$REGION" "$HOME" > ~/.oci/config
+          chmod 600 ~/.oci/config
+          pipx install --quiet oci-cli >/dev/null 2>&1
+      - name: Deploy WAHA without reboot
+        env:
+          COMPARTMENT_OCID: ${{ vars.OCI_COMPARTMENT_OCID }}
+          DOMAIN: ${{ vars.GATEWAY_DOMAIN || 'wa.nitutravels.in' }}
+          API_KEY: ${{ secrets.GATEWAY_API_KEY }}
+          IMAGE: ghcr.io/nitutravels/nitu-whatsapp-gateway:bb3cd8c8b630d3ee0a1f7e1dd025b807ddad72fb
+          SESSION_NAME: nitu-travels
+        run: |
+          chmod 0755 scripts/deploy-waha.sh
+          scripts/deploy-waha.sh
