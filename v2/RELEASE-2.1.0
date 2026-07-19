@@ -1,4 +1,4 @@
-Nitu Travels Baileys Gateway v2.1.2
+Nitu Travels Baileys Gateway v2.1.3
 
 Website integration changes:
 - Oracle minute worker authenticates to whatsapp-gateway-worker.php with x-api-key.
@@ -12,16 +12,18 @@ Cutover safety:
 - All queued/retry rows may be cancelled in one guarded action.
 - Pairing WhatsApp does not release stale messages until delivery is resumed.
 
-Authentication reconciliation repair:
-- Partial creds.update payloads are merged into the encrypted SQLite credentials row before persistence.
-- Readiness uses the live socket auth state instead of a stale pre-socket credentials copy.
-- Account identity falls back to the authenticated credential identity when socket.user is not populated yet.
+Authentication repair:
+- Partial creds.update payloads are merged and encrypted before persistence.
+- Readiness uses the live socket authentication state.
+- An open socket without registered credentials is now classified as incomplete authentication, not readiness.
+- Delivery is automatically paused before recovery.
+- The unusable local auth state is cleared once and a fresh QR is generated automatically.
+- A successful new pairing persists registered credentials and the device identity before delivery can resume.
 
-Non-disruptive deployment repair:
-- Application releases no longer SOFTRESET a running Oracle VM.
+Non-disruptive deployment:
+- Application releases do not reboot a running Oracle VM.
 - A stopped VM is started through the OCI control plane; a running VM remains online.
-- Immutable image rollout is applied through the existing five-minute metadata-sync service.
+- Immutable image rollout is applied through the existing metadata-sync service.
 - Verification bypasses public DNS and tests the current VNIC public IP directly with TLS SNI.
-- This prevents routine code releases from producing ERR_ADDRESS_UNREACHABLE outages.
 
 Companion website release: Manage Nitu Travels v15.10.
