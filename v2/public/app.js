@@ -44,7 +44,7 @@ function showDashboard() {
 
 function prettyStatus(status) {
   if (status.ready) return 'Ready';
-  const names = { pairing: 'Pairing required', connecting: 'Connecting', reconnecting: 'Reconnecting', logged_out: 'Logged out', error: 'Error', starting: 'Starting' };
+  const names = { pairing: 'Pairing required', connecting: 'Connecting', reconnecting: 'Reconnecting', logged_out: 'Logged out', error: 'Error', starting: 'Starting', open: 'Open but unregistered' };
   return names[status.phase] || status.phase || 'Offline';
 }
 
@@ -57,10 +57,16 @@ async function loadStatus() {
     $('account').textContent = status.account?.wid || 'Not linked';
     $('engine').textContent = `${status.engine || 'unknown'} ${status.engineVersion || ''}`;
     const queue = status.queue || {};
+    const worker = status.worker || {};
     $('queued').textContent = (queue.queued || 0) + (queue.retry || 0) + (queue.sending || 0);
     $('failed').textContent = queue.failed || 0;
-    $('worker').textContent = status.worker?.busy ? 'worker sending' : status.worker?.circuitOpenUntil ? 'circuit paused' : 'worker idle';
+    $('worker').textContent = worker.paused ? 'delivery paused' : worker.busy ? 'worker sending' : worker.circuitOpenUntil ? 'circuit paused' : 'worker idle';
     $('heartbeat').textContent = status.lastHeartbeatAt ? `heartbeat ${new Date(status.lastHeartbeatAt).toLocaleTimeString()}` : 'no heartbeat yet';
+    $('queueSafetyText').textContent = worker.paused
+      ? `Paused${worker.pauseReason ? `: ${worker.pauseReason}` : ''}`
+      : 'Delivery is enabled. Due queued messages may send whenever WhatsApp is ready.';
+    $('pauseQueue').disabled = Boolean(worker.paused);
+    $('resumeQueue').disabled = !worker.paused;
 
     const showConnect = !status.ready;
     $('connectCard').hidden = !showConnect;
@@ -86,15 +92,20 @@ async function loadStatus() {
 async function loadMessages() {
   try {
     const rows = await api('/admin/api/messages?limit=100');
-    $('messages').innerHTML = rows.map(message => `<tr>
-      <td>${new Date(message.createdAt).toLocaleString()}</td>
-      <td>${escapeHtml(message.to)}</td>
-      <td><span class="status ${escapeHtml(message.status)}">${escapeHtml(message.status)}</span></td>
-      <td>${message.attempts}</td>
-      <td>${message.uncertain ? 'Yes' : 'No'}</td>
-      <td>${escapeHtml(message.error || '')}</td>
-      <td>${message.status === 'failed' ? `<button class="secondary retryMessage" data-id="${escapeHtml(message.id)}">Retry</button>` : '—'}</td>
-    </tr>`).join('');
+    $('messages').innerHTML = rows.map(message => {
+      let action = '—';
+      if (message.status === 'failed') action = `<button class="secondary retryMessage" data-id="${escapeHtml(message.id)}">Retry</button>`;
+      if (['queued', 'retry'].includes(message.status)) action = `<button class="danger cancelMessage" data-id="${escapeHtml(message.id)}">Cancel</button>`;
+      return `<tr>
+        <td>${new Date(message.createdAt).toLocaleString()}</td>
+        <td>${escapeHtml(message.to)}</td>
+        <td><span class="status ${escapeHtml(message.status)}">${escapeHtml(message.status)}</span></td>
+        <td>${message.attempts}</td>
+        <td>${message.uncertain ? 'Yes' : 'No'}</td>
+        <td>${escapeHtml(message.error || '')}</td>
+        <td>${action}</td>
+      </tr>`;
+    }).join('');
   } catch (error) {
     toast(error.message);
   }
@@ -141,6 +152,33 @@ $('pairForm').addEventListener('submit', async event => {
   }
 });
 
+$('pauseQueue').addEventListener('click', async () => {
+  try {
+    await api('/admin/api/queue/pause', { method: 'POST', body: JSON.stringify({ reason: 'Paused by administrator for queue review' }) });
+    toast('Delivery queue paused');
+    loadStatus();
+  } catch (error) { toast(error.message); }
+});
+
+$('resumeQueue').addEventListener('click', async () => {
+  const pending = Number($('queued').textContent || 0);
+  if (!confirm(`Resume delivery? ${pending} pending message(s) may send automatically once WhatsApp is ready.`)) return;
+  try {
+    await api('/admin/api/queue/resume', { method: 'POST', body: '{}' });
+    toast('Delivery queue resumed');
+    loadStatus();
+  } catch (error) { toast(error.message); }
+});
+
+$('cancelPending').addEventListener('click', async () => {
+  if (!confirm('Cancel every queued/retry gateway message before delivery? Sent, delivered and actively sending messages are not changed.')) return;
+  try {
+    const result = await api('/admin/api/messages/cancel-pending', { method: 'POST', body: '{}' });
+    toast(`${result.cancelled || 0} pending message(s) cancelled`);
+    loadAll();
+  } catch (error) { toast(error.message); }
+});
+
 $('reconnect').addEventListener('click', async () => {
   try {
     await api('/admin/api/reconnect', { method: 'POST', body: '{}' });
@@ -163,19 +201,26 @@ $('testForm').addEventListener('submit', async event => {
   try {
     await api('/admin/api/test', { method: 'POST', body: JSON.stringify({ to: $('testTo').value, text: $('testText').value }) });
     $('testText').value = '';
-    toast(lastStatus?.ready ? 'Test queued for immediate delivery' : 'Test stored; delivery waits for an open socket');
+    toast(lastStatus?.worker?.paused ? 'Test stored; resume delivery after review' : lastStatus?.ready ? 'Test queued for immediate delivery' : 'Test stored; delivery waits for an open socket');
     loadMessages();
   } catch (error) { toast(error.message); }
 });
 
 $('refresh').addEventListener('click', loadAll);
 $('messages').addEventListener('click', async event => {
-  const button = event.target.closest('.retryMessage');
+  const retry = event.target.closest('.retryMessage');
+  const cancel = event.target.closest('.cancelMessage');
+  const button = retry || cancel;
   if (!button) return;
   button.disabled = true;
   try {
-    await api(`/admin/api/messages/${encodeURIComponent(button.dataset.id)}/retry`, { method: 'POST', body: '{}' });
-    toast('Message returned to the durable queue');
+    if (retry) {
+      await api(`/admin/api/messages/${encodeURIComponent(button.dataset.id)}/retry`, { method: 'POST', body: '{}' });
+      toast('Message returned to the durable queue');
+    } else {
+      await api(`/admin/api/messages/${encodeURIComponent(button.dataset.id)}/cancel`, { method: 'POST', body: '{}' });
+      toast('Pending message cancelled');
+    }
     loadAll();
   } catch (error) {
     toast(error.message);
