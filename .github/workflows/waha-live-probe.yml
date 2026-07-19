@@ -6,20 +6,34 @@ on:
 
 permissions:
   contents: read
-  packages: read
+  packages: write
+
+concurrency:
+  group: manual-waha-oracle-install
+  cancel-in-progress: true
 
 jobs:
   install:
     runs-on: ubuntu-latest
     environment: production
-    timeout-minutes: 45
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
       - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and publish WAHA ARM64 image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          platforms: linux/arm64
+          tags: ghcr.io/nitutravels/nitu-whatsapp-gateway:manual-waha-install-20260719
+          cache-from: type=gha,scope=manual-waha-install
+          cache-to: type=gha,mode=max,scope=manual-waha-install
       - name: Configure OCI
         env:
           KEY: ${{ secrets.OCI_PRIVATE_KEY }}
@@ -39,7 +53,7 @@ jobs:
           COMPARTMENT_OCID: ${{ vars.OCI_COMPARTMENT_OCID }}
           DOMAIN: ${{ vars.GATEWAY_DOMAIN || 'wa.nitutravels.in' }}
           API_KEY: ${{ secrets.GATEWAY_API_KEY }}
-          IMAGE: ghcr.io/nitutravels/nitu-whatsapp-gateway:bb3cd8c8b630d3ee0a1f7e1dd025b807ddad72fb
+          IMAGE: ghcr.io/nitutravels/nitu-whatsapp-gateway:manual-waha-install-20260719
           SESSION_NAME: nitu-travels
         run: |
           chmod 0755 scripts/deploy-waha.sh
