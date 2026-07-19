@@ -34,6 +34,8 @@ if (!parsed.success) {
 const env = parsed.data;
 export default Object.freeze({
   ...env,
+  WEBHOOK_URL: env.WEBHOOK_URL || 'https://manage.nitutravels.in/whatsapp-gateway-webhook.php',
+  WEBSITE_WORKER_URL: env.WEBSITE_WORKER_URL || 'https://manage.nitutravels.in/whatsapp-gateway-worker.php',
   DB_PATH: path.join(env.DATA_DIR, 'gateway.sqlite'),
   MEDIA_ALLOWED_HOSTS_SET: new Set(
     env.MEDIA_ALLOWED_HOSTS.split(',').map(value => value.trim().toLowerCase()).filter(Boolean)
