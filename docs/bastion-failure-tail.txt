@@ -1,0 +1,160 @@
+2026-07-19T16:43:45.5148842Z 
+2026-07-19T16:43:45.5150253Z ╭──────────────────────────────────────────────────────────────────────────────╮
+2026-07-19T16:43:45.5151389Z │                                                                              │
+2026-07-19T16:43:45.5152395Z │                                                                              │
+2026-07-19T16:43:45.5153399Z │                         ▄▀▀ ▄▀█ █▀▀ ▀█▀ █▀▄▀█ █▀▀ █▀█                        │
+2026-07-19T16:43:45.5154353Z │                         █▀  █▀█ ▄▄█  █  █ ▀ █ █▄▄ █▀▀                        │
+2026-07-19T16:43:45.5155457Z │                                                                              │
+2026-07-19T16:43:45.5156604Z │                                                                              │
+2026-07-19T16:43:45.5157823Z │                                                                              │
+2026-07-19T16:43:45.5158865Z │                                FastMCP 3.2.4                                 │
+2026-07-19T16:43:45.5159956Z │                            https://gofastmcp.com                             │
+2026-07-19T16:43:45.5160959Z │                                                                              │
+2026-07-19T16:43:45.5162050Z │              🖥  Server:      oracle.oci-cloud-mcp-server, 3.2.4              │
+2026-07-19T16:43:45.5162894Z │              🚀 Deploy free: https://horizon.prefect.io                      │
+2026-07-19T16:43:45.5163607Z │                                                                              │
+2026-07-19T16:43:45.5164217Z ╰──────────────────────────────────────────────────────────────────────────────╯
+2026-07-19T16:43:45.5164854Z ╭──────────────────────────────────────────────────────────────────────────────╮
+2026-07-19T16:43:45.5165721Z │                          🎉 Update available: 3.4.4                          │
+2026-07-19T16:43:45.5166354Z │                      Run: pip install --upgrade fastmcp                      │
+2026-07-19T16:43:45.5166991Z ╰──────────────────────────────────────────────────────────────────────────────╯
+2026-07-19T16:43:45.5167307Z 
+2026-07-19T16:43:45.5167323Z 
+2026-07-19T16:43:51.6874577Z PLUGIN_ATTEMPT=1 NAME=Bastion STATUS=RUNNING
+2026-07-19T16:43:57.2375970Z BASTION_ATTEMPT=1 STATE=ACTIVE
+2026-07-19T16:44:03.5313593Z SESSION_ATTEMPT=1 STATE=CREATING
+2026-07-19T16:44:14.5600382Z SESSION_ATTEMPT=2 STATE=CREATING
+2026-07-19T16:44:25.5311027Z SESSION_ATTEMPT=3 STATE=CREATING
+2026-07-19T16:44:36.5802372Z SESSION_ATTEMPT=4 STATE=CREATING
+2026-07-19T16:44:47.5487262Z SESSION_ATTEMPT=5 STATE=CREATING
+2026-07-19T16:44:58.5780631Z SESSION_ATTEMPT=6 STATE=CREATING
+2026-07-19T16:45:09.6135292Z SESSION_ATTEMPT=7 STATE=CREATING
+2026-07-19T16:45:20.5944664Z SESSION_ATTEMPT=8 STATE=CREATING
+2026-07-19T16:45:31.6055273Z SESSION_ATTEMPT=9 STATE=CREATING
+2026-07-19T16:45:42.5973077Z SESSION_ATTEMPT=10 STATE=CREATING
+2026-07-19T16:45:53.5955809Z SESSION_ATTEMPT=11 STATE=CREATING
+2026-07-19T16:46:04.5588399Z SESSION_ATTEMPT=12 STATE=CREATING
+2026-07-19T16:46:15.5899065Z SESSION_ATTEMPT=13 STATE=CREATING
+2026-07-19T16:46:26.5724257Z SESSION_ATTEMPT=14 STATE=CREATING
+2026-07-19T16:46:37.5938340Z SESSION_ATTEMPT=15 STATE=CREATING
+2026-07-19T16:46:48.5654418Z SESSION_ATTEMPT=16 STATE=CREATING
+2026-07-19T16:46:59.5674482Z SESSION_ATTEMPT=17 STATE=CREATING
+2026-07-19T16:47:10.5563066Z SESSION_ATTEMPT=18 STATE=CREATING
+2026-07-19T16:47:21.5021628Z SESSION_ATTEMPT=19 STATE=CREATING
+2026-07-19T16:47:32.5031106Z SESSION_ATTEMPT=20 STATE=CREATING
+2026-07-19T16:47:43.4513425Z SESSION_ATTEMPT=21 STATE=CREATING
+2026-07-19T16:47:54.4680305Z SESSION_ATTEMPT=22 STATE=CREATING
+2026-07-19T16:48:05.4430123Z SESSION_ATTEMPT=23 STATE=CREATING
+2026-07-19T16:48:16.4393363Z SESSION_ATTEMPT=24 STATE=CREATING
+2026-07-19T16:48:27.4677726Z SESSION_ATTEMPT=25 STATE=CREATING
+2026-07-19T16:48:38.5024362Z SESSION_ATTEMPT=26 STATE=CREATING
+2026-07-19T16:48:49.5014122Z SESSION_ATTEMPT=27 STATE=CREATING
+2026-07-19T16:49:00.5489392Z SESSION_ATTEMPT=28 STATE=CREATING
+2026-07-19T16:49:11.5558573Z SESSION_ATTEMPT=29 STATE=CREATING
+2026-07-19T16:49:22.5166068Z SESSION_ATTEMPT=30 STATE=CREATING
+2026-07-19T16:49:33.5184044Z SESSION_ATTEMPT=31 STATE=CREATING
+2026-07-19T16:49:44.5067665Z SESSION_ATTEMPT=32 STATE=CREATING
+2026-07-19T16:49:55.4572645Z SESSION_ATTEMPT=33 STATE=CREATING
+2026-07-19T16:50:06.4716216Z SESSION_ATTEMPT=34 STATE=CREATING
+2026-07-19T16:50:17.4407866Z SESSION_ATTEMPT=35 STATE=CREATING
+2026-07-19T16:50:28.4569429Z SESSION_ATTEMPT=36 STATE=CREATING
+2026-07-19T16:50:39.4536720Z SESSION_ATTEMPT=37 STATE=CREATING
+2026-07-19T16:50:50.4775242Z SESSION_ATTEMPT=38 STATE=CREATING
+2026-07-19T16:51:01.5720062Z SESSION_ATTEMPT=39 STATE=CREATING
+2026-07-19T16:51:12.6068905Z SESSION_ATTEMPT=40 STATE=CREATING
+2026-07-19T16:51:23.6122725Z SESSION_ATTEMPT=41 STATE=CREATING
+2026-07-19T16:51:34.5811824Z SESSION_ATTEMPT=42 STATE=CREATING
+2026-07-19T16:51:45.5153841Z SESSION_ATTEMPT=43 STATE=CREATING
+2026-07-19T16:51:56.4841939Z SESSION_ATTEMPT=44 STATE=CREATING
+2026-07-19T16:52:07.4585064Z SESSION_ATTEMPT=45 STATE=CREATING
+2026-07-19T16:52:18.5457120Z SESSION_ATTEMPT=46 STATE=CREATING
+2026-07-19T16:52:29.5743339Z SESSION_ATTEMPT=47 STATE=CREATING
+2026-07-19T16:52:40.5630485Z SESSION_ATTEMPT=48 STATE=CREATING
+2026-07-19T16:52:51.5669392Z SESSION_ATTEMPT=49 STATE=CREATING
+2026-07-19T16:53:02.5768638Z SESSION_ATTEMPT=50 STATE=CREATING
+2026-07-19T16:53:13.5738838Z SESSION_ATTEMPT=51 STATE=CREATING
+2026-07-19T16:53:24.5938182Z SESSION_ATTEMPT=52 STATE=CREATING
+2026-07-19T16:53:35.5881233Z SESSION_ATTEMPT=53 STATE=CREATING
+2026-07-19T16:53:46.6228257Z SESSION_ATTEMPT=54 STATE=CREATING
+2026-07-19T16:53:57.5970039Z SESSION_ATTEMPT=55 STATE=CREATING
+2026-07-19T16:54:08.5695718Z SESSION_ATTEMPT=56 STATE=CREATING
+2026-07-19T16:54:19.6250993Z SESSION_ATTEMPT=57 STATE=CREATING
+2026-07-19T16:54:30.6353439Z SESSION_ATTEMPT=58 STATE=CREATING
+2026-07-19T16:54:41.6108449Z SESSION_ATTEMPT=59 STATE=CREATING
+2026-07-19T16:54:52.6558260Z SESSION_ATTEMPT=60 STATE=CREATING
+2026-07-19T16:55:02.9657754Z   + Exception Group Traceback (most recent call last):
+2026-07-19T16:55:02.9658968Z   |   File "/tmp/official-mcp-bastion-deploy.py", line 364, in <module>
+2026-07-19T16:55:02.9659793Z   |     asyncio.run(main())
+2026-07-19T16:55:02.9660307Z   |   File "/usr/lib/python3.12/asyncio/runners.py", line 194, in run
+2026-07-19T16:55:02.9698993Z   |     return runner.run(main)
+2026-07-19T16:55:02.9699607Z   |            ^^^^^^^^^^^^^^^^
+2026-07-19T16:55:02.9700416Z   |   File "/usr/lib/python3.12/asyncio/runners.py", line 118, in run
+2026-07-19T16:55:02.9704930Z   |     return self._loop.run_until_complete(task)
+2026-07-19T16:55:02.9705824Z   |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-07-19T16:55:02.9706532Z   |   File "/usr/lib/python3.12/asyncio/base_events.py", line 687, in run_until_complete
+2026-07-19T16:55:02.9746451Z   |     return future.result()
+2026-07-19T16:55:02.9747122Z   |            ^^^^^^^^^^^^^^^
+2026-07-19T16:55:02.9748007Z   |   File "/tmp/official-mcp-bastion-deploy.py", line 179, in main
+2026-07-19T16:55:02.9748586Z   |     async with stdio_client(server) as (read, write):
+2026-07-19T16:55:02.9749170Z   |   File "/usr/lib/python3.12/contextlib.py", line 231, in __aexit__
+2026-07-19T16:55:02.9752524Z   |     await self.gen.athrow(value)
+2026-07-19T16:55:02.9754488Z   |   File "/home/runner/.cache/uv/archive-v0/-ka_nv2h02kQ0kNG/lib/python3.12/site-packages/mcp/client/stdio/__init__.py", line 182, in stdio_client
+2026-07-19T16:55:02.9756259Z   |     async with (
+2026-07-19T16:55:02.9758216Z   |   File "/home/runner/.cache/uv/archive-v0/-ka_nv2h02kQ0kNG/lib/python3.12/site-packages/anyio/_backends/_asyncio.py", line 815, in __aexit__
+2026-07-19T16:55:02.9759975Z   |     raise BaseExceptionGroup(
+2026-07-19T16:55:02.9761047Z   | ExceptionGroup: unhandled errors in a TaskGroup (1 sub-exception)
+2026-07-19T16:55:02.9762197Z   +-+---------------- 1 ----------------
+2026-07-19T16:55:02.9763177Z     | Exception Group Traceback (most recent call last):
+2026-07-19T16:55:02.9764772Z     |   File "/home/runner/.cache/uv/archive-v0/-ka_nv2h02kQ0kNG/lib/python3.12/site-packages/mcp/client/stdio/__init__.py", line 189, in stdio_client
+2026-07-19T16:55:02.9766165Z     |     yield read_stream, write_stream
+2026-07-19T16:55:02.9767110Z     |   File "/tmp/official-mcp-bastion-deploy.py", line 180, in main
+2026-07-19T16:55:02.9768326Z     |     async with ClientSession(read, write) as mcp:
+2026-07-19T16:55:02.9769720Z     |   File "/home/runner/.cache/uv/archive-v0/-ka_nv2h02kQ0kNG/lib/python3.12/site-packages/mcp/shared/session.py", line 238, in __aexit__
+2026-07-19T16:55:02.9771176Z     |     return await self._task_group.__aexit__(exc_type, exc_val, exc_tb)
+2026-07-19T16:55:02.9772180Z     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-07-19T16:55:02.9773530Z     |   File "/home/runner/.cache/uv/archive-v0/-ka_nv2h02kQ0kNG/lib/python3.12/site-packages/anyio/_backends/_asyncio.py", line 815, in __aexit__
+2026-07-19T16:55:02.9774930Z     |     raise BaseExceptionGroup(
+2026-07-19T16:55:02.9775795Z     | ExceptionGroup: unhandled errors in a TaskGroup (1 sub-exception)
+2026-07-19T16:55:02.9776390Z     +-+---------------- 1 ----------------
+2026-07-19T16:55:02.9776836Z       | Traceback (most recent call last):
+2026-07-19T16:55:02.9777365Z       |   File "/tmp/official-mcp-bastion-deploy.py", line 312, in main
+2026-07-19T16:55:02.9778235Z       |     active_session = await wait_session(mcp, session_id)
+2026-07-19T16:55:02.9778781Z       |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-07-19T16:55:02.9779411Z       |   File "/tmp/official-mcp-bastion-deploy.py", line 161, in wait_session
+2026-07-19T16:55:02.9780147Z       |     raise RuntimeError('OCI Bastion session did not become ACTIVE')
+2026-07-19T16:55:02.9781041Z       | RuntimeError: OCI Bastion session did not become ACTIVE
+2026-07-19T16:55:02.9781600Z       +------------------------------------
+2026-07-19T16:55:03.0486204Z ##[error]Process completed with exit code 1.
+2026-07-19T16:55:03.0699372Z Post job cleanup.
+2026-07-19T16:55:03.1609767Z [command]/usr/bin/git version
+2026-07-19T16:55:03.1653867Z git version 2.54.0
+2026-07-19T16:55:03.1698820Z Temporarily overriding HOME='/home/runner/work/_temp/b8d91fb5-6759-46e9-b393-cbfe6aa21af0' before making global git config changes
+2026-07-19T16:55:03.1700593Z Adding repository directory to the temporary git global config as a safe directory
+2026-07-19T16:55:03.1715326Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/nitu-whatsapp-gateway/nitu-whatsapp-gateway
+2026-07-19T16:55:03.1752780Z Removing SSH command configuration
+2026-07-19T16:55:03.1759930Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-07-19T16:55:03.1822552Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-07-19T16:55:03.2062838Z Removing HTTP extra header
+2026-07-19T16:55:03.2068789Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-07-19T16:55:03.2109096Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-07-19T16:55:03.2352597Z Removing includeIf entries pointing to credentials config files
+2026-07-19T16:55:03.2359847Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-07-19T16:55:03.2397143Z includeif.gitdir:/home/runner/work/nitu-whatsapp-gateway/nitu-whatsapp-gateway/.git.path
+2026-07-19T16:55:03.2399916Z includeif.gitdir:/home/runner/work/nitu-whatsapp-gateway/nitu-whatsapp-gateway/.git/worktrees/*.path
+2026-07-19T16:55:03.2402350Z includeif.gitdir:/github/workspace/.git.path
+2026-07-19T16:55:03.2404100Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-07-19T16:55:03.2411855Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/nitu-whatsapp-gateway/nitu-whatsapp-gateway/.git.path
+2026-07-19T16:55:03.2438892Z /home/runner/work/_temp/git-credentials-113bf48b-0862-4d15-9818-f71d729ad943.config
+2026-07-19T16:55:03.2451868Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/nitu-whatsapp-gateway/nitu-whatsapp-gateway/.git.path /home/runner/work/_temp/git-credentials-113bf48b-0862-4d15-9818-f71d729ad943.config
+2026-07-19T16:55:03.2510338Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/nitu-whatsapp-gateway/nitu-whatsapp-gateway/.git/worktrees/*.path
+2026-07-19T16:55:03.2578769Z /home/runner/work/_temp/git-credentials-113bf48b-0862-4d15-9818-f71d729ad943.config
+2026-07-19T16:55:03.2639586Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/nitu-whatsapp-gateway/nitu-whatsapp-gateway/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-113bf48b-0862-4d15-9818-f71d729ad943.config
+2026-07-19T16:55:03.2688870Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+2026-07-19T16:55:03.2690462Z /github/runner_temp/git-credentials-113bf48b-0862-4d15-9818-f71d729ad943.config
+2026-07-19T16:55:03.2692774Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-113bf48b-0862-4d15-9818-f71d729ad943.config
+2026-07-19T16:55:03.2730504Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-07-19T16:55:03.2756674Z /github/runner_temp/git-credentials-113bf48b-0862-4d15-9818-f71d729ad943.config
+2026-07-19T16:55:03.2766886Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-113bf48b-0862-4d15-9818-f71d729ad943.config
+2026-07-19T16:55:03.2813141Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-07-19T16:55:03.3052575Z Removing credentials config '/home/runner/work/_temp/git-credentials-113bf48b-0862-4d15-9818-f71d729ad943.config'
+2026-07-19T16:55:03.3202060Z Cleaning up orphan processes
