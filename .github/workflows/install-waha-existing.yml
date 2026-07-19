@@ -1,23 +1,104 @@
-name: WAHA metadata installer — superseded
+name: Deploy fixed WAHA image to existing Oracle VM
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
     paths:
       - '.github/workflows/install-waha-existing.yml'
-  workflow_dispatch:
+      - 'Dockerfile'
+      - 'docker/waha-entrypoint.sh'
+      - 'docker/nitu-waha-supervisor.mjs'
+      - 'waha-oracle/METADATA-DEPLOY'
 
 permissions:
-  contents: read
+  contents: write
+  packages: write
 
 concurrency:
   group: nitu-waha-existing-vm-install
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
-  superseded:
+  deploy:
     runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 50
     steps:
-      - run: |
-          echo 'This metadata-image installer was superseded by the reversible Oracle boot-volume replacement workflow.'
-          echo 'No infrastructure or container change is performed here.'
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Define immutable image
+        id: image
+        shell: bash
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ steps.image.outputs.name }}
+            ghcr.io/${{ github.repository }}:waha-production
+          provenance: mode=max
+          sbom: true
+
+      - name: Configure OCI credentials
+        shell: bash
+        env:
+          OCI_PRIVATE_KEY_PEM: ${{ secrets.OCI_PRIVATE_KEY }}
+          OCI_FINGERPRINT_VALUE: ${{ secrets.OCI_FINGERPRINT }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$HOME/.oci"
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          value=os.environ.get('OCI_PRIVATE_KEY_PEM','').strip()
+          if len(value)>=2 and value[0]==value[-1] and value[0] in {'"',"'"}: value=value[1:-1]
+          if '\\n' in value and '\n' not in value: value=value.replace('\\r','').replace('\\n','\n')
+          Path.home().joinpath('.oci/key.pem').write_text(value.replace('\r','').strip()+'\n')
+          PY
+          chmod 600 "$HOME/.oci/key.pem"
+          cat > "$HOME/.oci/config" <<EOF
+          [DEFAULT]
+          user=${{ secrets.OCI_USER_OCID }}
+          fingerprint=$(printf '%s' "$OCI_FINGERPRINT_VALUE" | tr -d '[:space:]')
+          tenancy=${{ secrets.OCI_TENANCY_OCID }}
+          region=${{ vars.OCI_REGION }}
+          key_file=$HOME/.oci/key.pem
+          EOF
+          chmod 600 "$HOME/.oci/config"
+          pipx install --quiet oci-cli
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Pin corrected WAHA image and verify live service
+        shell: bash
+        env:
+          COMPARTMENT_OCID: ${{ vars.OCI_COMPARTMENT_OCID }}
+          DOMAIN: ${{ vars.GATEWAY_DOMAIN || 'wa.nitutravels.in' }}
+          API_KEY: ${{ secrets.GATEWAY_API_KEY }}
+          IMAGE: ${{ steps.image.outputs.name }}
+          SESSION_NAME: nitu-travels
+        run: |
+          set -Eeuo pipefail
+          mkdir -p docs
+          chmod 0755 scripts/deploy-waha.sh
+          scripts/deploy-waha.sh 2>&1 | tee docs/waha-metadata-deploy-result.txt
+
+      - name: Persist sanitized deployment result
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -f docs/waha-metadata-deploy-result.txt || echo 'WAHA metadata deployment did not produce a result file.' > docs/waha-metadata-deploy-result.txt
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/waha-metadata-deploy-result.txt
+          git diff --cached --quiet || git commit -m 'Record WAHA metadata deployment result'
+          git pull --rebase origin main
+          git push origin HEAD:main
