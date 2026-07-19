@@ -20,10 +20,13 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.ref }}
-          fetch-depth: 0
 
       - name: Restore validated Bastion repair script
-        run: git show 2acde60d0a77b486a4e51273b0c87001516f714a:scripts/official-mcp-bastion-deploy.py > /tmp/official-mcp-bastion-deploy.py
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags --depth=1 origin 2acde60d0a77b486a4e51273b0c87001516f714a
+          git show FETCH_HEAD:scripts/official-mcp-bastion-deploy.py > /tmp/official-mcp-bastion-deploy.py
+          python -m py_compile /tmp/official-mcp-bastion-deploy.py
 
       - name: Configure OCI profile
         shell: bash
