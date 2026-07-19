@@ -1,7 +1,8 @@
 Nitu Travels WAHA Core NOWEB Oracle installation
-Release: 2026-07-19.2-blue-green
+Release: 2026-07-19.3-scan-qr-code
 Primary transport: WAHA Core NOWEB
 Session: nitu-travels
+Accepted QR-ready state: SCAN_QR_CODE
 Deployment: isolated candidate, pre-cutover verification, reserved-IP reassignment, automatic rollback
 Legacy custom gateway: preserve offline after verified cutover
 Delivery state after installation: pairing required; website automation remains gated until WORKING
