@@ -25,7 +25,8 @@ export class WebhookWorker {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          'user-agent': 'NituWhatsAppGateway/2.0',
+          'user-agent': 'NituWhatsAppGateway/2.2',
+          'x-api-key': config.API_KEY,
           'x-gateway-signature': signPayload(body)
         },
         body,
