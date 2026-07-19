@@ -1,2 +1,2 @@
-Probe requested: 2026-07-19T13:20Z
-Purpose: check WAHA health while retained Oracle cloud-init installs Docker and containers
+Probe requested: 2026-07-19T13:24Z
+Purpose: verify WAHA health and NOWEB session after container startup
