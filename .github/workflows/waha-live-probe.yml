@@ -1,306 +1,71 @@
-name: Complete WAHA install through official Oracle OCI MCP
-
+name: Diagnose Oracle Cloud Agent through official OCI MCP
 on:
   pull_request:
     branches: [main]
-
-permissions:
-  contents: read
-  packages: read
-
+permissions: {contents: read}
 concurrency:
-  group: official-oracle-mcp-waha-install
+  group: official-oracle-mcp-agent-diagnostic
   cancel-in-progress: true
-
 jobs:
-  install:
+  diagnose:
     runs-on: ubuntu-latest
     environment: production
-    timeout-minutes: 35
+    timeout-minutes: 12
     steps:
-      - name: Configure OCI profile and MCP runtime
+      - name: Oracle MCP diagnostic
         shell: bash
         env:
-          OCI_PRIVATE_KEY_PEM: ${{ secrets.OCI_PRIVATE_KEY }}
-          OCI_FINGERPRINT_VALUE: ${{ secrets.OCI_FINGERPRINT }}
-          OCI_USER_OCID: ${{ secrets.OCI_USER_OCID }}
-          OCI_TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
-          OCI_REGION: ${{ vars.OCI_REGION }}
-        run: |
-          set -Eeuo pipefail
-          mkdir -p "$HOME/.oci"
-          python - <<'PY'
-          import os
-          from pathlib import Path
-          value = os.environ['OCI_PRIVATE_KEY_PEM'].strip()
-          if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
-              value = value[1:-1]
-          if '\\n' in value and '\n' not in value:
-              value = value.replace('\\r', '').replace('\\n', '\n')
-          Path.home().joinpath('.oci/key.pem').write_text(value.replace('\r', '').strip() + '\n')
-          PY
-          chmod 600 "$HOME/.oci/key.pem"
-          fingerprint="$(printf '%s' "$OCI_FINGERPRINT_VALUE" | tr -d '[:space:]')"
-          cat > "$HOME/.oci/config" <<EOF
-          [DEFAULT]
-          user=$OCI_USER_OCID
-          fingerprint=$fingerprint
-          tenancy=$OCI_TENANCY_OCID
-          region=$OCI_REGION
-          key_file=$HOME/.oci/key.pem
-          EOF
-          chmod 600 "$HOME/.oci/config"
-          pipx install --quiet uv
-
-      - name: Enable Run Command and deploy WAHA through Oracle OCI MCP
-        shell: bash
-        env:
-          COMPARTMENT_OCID: ${{ vars.OCI_COMPARTMENT_OCID }}
-          TARGET_IMAGE: ghcr.io/nitutravels/nitu-whatsapp-gateway:official-mcp-waha-20260719
+          KEY: ${{ secrets.OCI_PRIVATE_KEY }}
+          FP: ${{ secrets.OCI_FINGERPRINT }}
+          USER_OCID: ${{ secrets.OCI_USER_OCID }}
+          TENANCY: ${{ secrets.OCI_TENANCY_OCID }}
+          REGION: ${{ vars.OCI_REGION }}
+          COMPARTMENT: ${{ vars.OCI_COMPARTMENT_OCID }}
           OCI_CONFIG_PROFILE: DEFAULT
           FASTMCP_LOG_LEVEL: ERROR
         run: |
           set -Eeuo pipefail
+          mkdir -p ~/.oci
+          python -c 'import os,pathlib;v=os.environ["KEY"].strip().strip("\"\047").replace("\\r","").replace("\\n","\n");pathlib.Path.home().joinpath(".oci/key.pem").write_text(v.strip()+"\n")'
+          chmod 600 ~/.oci/key.pem
+          printf '[DEFAULT]\nuser=%s\nfingerprint=%s\ntenancy=%s\nregion=%s\nkey_file=%s/.oci/key.pem\n' "$USER_OCID" "$(echo "$FP"|tr -d '[:space:]')" "$TENANCY" "$REGION" "$HOME" > ~/.oci/config
+          chmod 600 ~/.oci/config
+          pipx install --quiet uv
           uv run --with 'mcp>=1.0' python - <<'PY'
-          import asyncio, base64, json, os, re
-          from mcp import ClientSession, StdioServerParameters
+          import asyncio,json,os
+          from mcp import ClientSession,StdioServerParameters
           from mcp.client.stdio import stdio_client
-
-          def text_payload(result):
-              return ''.join(getattr(item, 'text', '') for item in result.content)
-
-          def parse_json(text):
-              text = text.strip()
-              try:
-                  return json.loads(text)
-              except Exception:
-                  start, end = text.find('{'), text.rfind('}')
-                  if start >= 0 and end > start:
-                      return json.loads(text[start:end+1])
-                  raise RuntimeError('Oracle MCP returned a non-JSON response')
-
-          async def call(session, client, operation, params, fields=None, max_results=None):
-              args = {
-                  'client_fqn': client,
-                  'operation': operation,
-                  'params': params,
-                  'result_mode': 'full',
-              }
-              if fields is not None:
-                  args['fields'] = fields
-              if max_results is not None:
-                  args['max_results'] = max_results
-              result = await session.call_tool('invoke_oci_api', args)
-              if getattr(result, 'isError', False):
-                  raise RuntimeError(text_payload(result))
-              return parse_json(text_payload(result))
-
-          def items_of(obj):
-              data = obj.get('data', [])
-              if isinstance(data, dict):
-                  return data.get('items', data.get('results', []))
-              return data if isinstance(data, list) else []
-
+          def decode(r):
+              t=''.join(getattr(x,'text','') for x in r.content).strip(); a=t.find('{'); b=t.rfind('}')
+              if a>=0 and b>a: t=t[a:b+1]
+              return json.loads(t)
+          async def invoke(s,c,o,p,fields=None,max_results=None):
+              a={'client_fqn':c,'operation':o,'params':p,'result_mode':'full'}
+              if fields:a['fields']=fields
+              if max_results:a['max_results']=max_results
+              r=await s.call_tool('invoke_oci_api',a)
+              if getattr(r,'isError',False): raise RuntimeError(''.join(getattr(x,'text','') for x in r.content))
+              return decode(r)
+          def items(x):
+              d=x.get('data',[])
+              return d.get('items',d.get('results',[])) if isinstance(d,dict) else d
           async def main():
-              compartment = os.environ['COMPARTMENT_OCID']
-              target_image = os.environ['TARGET_IMAGE']
-              server = StdioServerParameters(
-                  command='uvx',
-                  args=['oracle.oci-cloud-mcp-server@latest'],
-                  env={**os.environ, 'OCI_CONFIG_PROFILE': 'DEFAULT', 'FASTMCP_LOG_LEVEL': 'ERROR'},
-              )
-              async with stdio_client(server) as (read, write):
-                  async with ClientSession(read, write) as session:
-                      await session.initialize()
-                      listed = await call(session, 'oci.core.ComputeClient', 'list_instances',
-                          {'compartment_id': compartment},
-                          ['id', 'display_name', 'lifecycle_state'], 20)
-                      target = next((x for x in items_of(listed)
-                                     if x.get('display_name') == 'nitu-whatsapp-gateway'
-                                     and x.get('lifecycle_state') != 'TERMINATED'), None)
-                      if not target:
-                          raise RuntimeError('Oracle instance nitu-whatsapp-gateway was not found')
-                      instance_id = target['id']
-
-                      current = await call(session, 'oci.core.ComputeClient', 'get_instance',
-                          {'instance_id': instance_id},
-                          ['display_name', 'lifecycle_state', 'metadata', 'agent_config'])
-                      instance = current.get('data') or {}
-                      metadata = dict(instance.get('metadata') or {})
-                      encoded = metadata.get('gateway_env_b64')
-                      if not encoded:
-                          raise RuntimeError('gateway_env_b64 metadata is absent; refusing destructive replacement')
-                      env_text = base64.b64decode(encoded).decode('utf-8')
-                      if re.search(r'^GATEWAY_IMAGE=.*$', env_text, flags=re.M):
-                          env_text = re.sub(r'^GATEWAY_IMAGE=.*$', f'GATEWAY_IMAGE={target_image}', env_text, flags=re.M)
-                      else:
-                          env_text = f'GATEWAY_IMAGE={target_image}\n' + env_text
-                      metadata['gateway_env_b64'] = base64.b64encode(env_text.encode()).decode()
-
-                      agent = dict(instance.get('agent_config') or {})
-                      agent['are_all_plugins_disabled'] = False
-                      agent['is_management_disabled'] = False
-                      plugins = list(agent.get('plugins_config') or [])
-                      found = False
-                      for plugin in plugins:
-                          if plugin.get('name') == 'Compute Instance Run Command':
-                              plugin['desired_state'] = 'ENABLED'
-                              found = True
-                      if not found:
-                          plugins.append({'name': 'Compute Instance Run Command', 'desired_state': 'ENABLED'})
-                      agent['plugins_config'] = plugins
-
-                      await call(session, 'oci.core.ComputeClient', 'update_instance', {
-                          'instance_id': instance_id,
-                          'update_instance_details': {
-                              'metadata': metadata,
-                              'agent_config': agent,
-                          },
-                      }, ['display_name', 'lifecycle_state'])
-                      print('MCP_METADATA_AND_AGENT_CONFIG_UPDATED=yes')
-
-                      plugin_running = False
-                      for attempt in range(1, 45):
-                          plugin_result = await call(session,
-                              'oci.compute_instance_agent.PluginClient',
-                              'list_instance_agent_plugins',
-                              {
-                                  'compartment_id': compartment,
-                                  'instanceagent_id': instance_id,
-                                  'name': 'Compute Instance Run Command',
-                              }, ['name', 'status'], 10)
-                          rows = items_of(plugin_result)
-                          status = rows[0].get('status') if rows else 'UNKNOWN'
-                          print(f'MCP_RUN_COMMAND_PLUGIN_ATTEMPT={attempt} STATUS={status}')
-                          if status == 'RUNNING':
-                              plugin_running = True
-                              break
-                          await asyncio.sleep(15)
-                      if not plugin_running:
-                          raise RuntimeError('Compute Instance Run Command plugin did not become RUNNING')
-
-                      host_script = '''set -Eeuo pipefail
-          echo WAHA_HOST_DEPLOY_BEGIN
-          systemctl start nitu-wa-config-sync.service
-          systemctl start nitu-wa-update.service
-          cd /opt/nitu-wa
-          docker compose --env-file .env up -d --remove-orphans
-          docker compose --env-file .env ps
-          for i in $(seq 1 60); do curl -fsS http://127.0.0.1:3000/health && break; sleep 5; done
-          curl -fsS http://127.0.0.1:3000/health
-          echo WAHA_HOST_DEPLOY_SUCCESS
-          '''
-                      created = await call(session,
-                          'oci.compute_instance_agent.ComputeInstanceAgentClient',
-                          'create_instance_agent_command',
-                          {
-                              'create_instance_agent_command_details': {
-                                  '__model': 'CreateInstanceAgentCommandDetails',
-                                  'compartment_id': compartment,
-                                  'execution_time_out_in_seconds': 900,
-                                  'display_name': 'Nitu WAHA production deployment',
-                                  'target': {
-                                      '__model': 'InstanceAgentCommandTarget',
-                                      'instance_id': instance_id,
-                                  },
-                                  'content': {
-                                      '__model': 'InstanceAgentCommandContent',
-                                      'source': {
-                                          '__model': 'InstanceAgentCommandSourceViaTextDetails',
-                                          'source_type': 'TEXT',
-                                          'text': host_script,
-                                      },
-                                      'output': {
-                                          '__model': 'InstanceAgentCommandOutputViaTextDetails',
-                                          'output_type': 'TEXT',
-                                      },
-                                  },
-                              },
-                          }, ['id', 'display_name'])
-                      command_id = (created.get('data') or {}).get('id')
-                      if not command_id:
-                          raise RuntimeError('Oracle MCP did not return the Run Command OCID')
-
-                      completed = False
-                      for attempt in range(1, 61):
-                          execution = await call(session,
-                              'oci.compute_instance_agent.ComputeInstanceAgentClient',
-                              'get_instance_agent_command_execution',
-                              {
-                                  'instance_agent_command_id': command_id,
-                                  'instance_id': instance_id,
-                              }, ['lifecycle_state', 'delivery_state', 'content'])
-                          data = execution.get('data') or {}
-                          lifecycle = data.get('lifecycle_state', 'UNKNOWN')
-                          print(f'MCP_RUN_COMMAND_ATTEMPT={attempt} LIFECYCLE={lifecycle}')
-                          if lifecycle == 'SUCCEEDED':
-                              completed = True
-                              output = data.get('content') or {}
-                              text = output.get('text') if isinstance(output, dict) else None
-                              if text:
-                                  safe = '\n'.join(line for line in text.splitlines()
-                                                   if not any(k in line for k in ('API_KEY=', 'ADMIN_TOKEN=', 'WEBHOOK_SECRET=')))
-                                  print('MCP_RUN_COMMAND_OUTPUT_BEGIN')
-                                  print(safe[-4000:])
-                                  print('MCP_RUN_COMMAND_OUTPUT_END')
-                              break
-                          if lifecycle in {'FAILED', 'TIMED_OUT', 'CANCELED'}:
-                              raise RuntimeError(f'Oracle Run Command ended in {lifecycle}')
-                          await asyncio.sleep(10)
-                      if not completed:
-                          raise RuntimeError('Oracle Run Command did not complete within the verification window')
-
-                      attachments = await call(session, 'oci.core.ComputeClient', 'list_vnic_attachments',
-                          {'compartment_id': compartment, 'instance_id': instance_id},
-                          ['vnic_id', 'lifecycle_state'], 10)
-                      attachment = next((x for x in items_of(attachments)
-                                         if x.get('lifecycle_state') == 'ATTACHED'), None)
-                      if not attachment:
-                          raise RuntimeError('Attached VNIC was not found')
-                      vnic = await call(session, 'oci.core.VirtualNetworkClient', 'get_vnic',
-                          {'vnic_id': attachment['vnic_id']}, ['public_ip'])
-                      public_ip = (vnic.get('data') or {}).get('public_ip')
-                      if not public_ip:
-                          raise RuntimeError('Oracle VNIC has no public IP')
-                      with open('/tmp/oracle-public-ip', 'w') as fh:
-                          fh.write(public_ip)
-                      print(f'MCP_PUBLIC_IP={public_ip}')
-
+              server=StdioServerParameters(command='uvx',args=['oracle.oci-cloud-mcp-server@latest'],env={**os.environ,'OCI_CONFIG_PROFILE':'DEFAULT','FASTMCP_LOG_LEVEL':'ERROR'})
+              async with stdio_client(server) as (r,w):
+                async with ClientSession(r,w) as s:
+                  await s.initialize()
+                  ls=await invoke(s,'oci.core.ComputeClient','list_instances',{'compartment_id':os.environ['COMPARTMENT']},['id','display_name','lifecycle_state'],20)
+                  target=next(x for x in items(ls) if x.get('display_name')=='nitu-whatsapp-gateway' and x.get('lifecycle_state')!='TERMINATED')
+                  iid=target['id']
+                  ins=await invoke(s,'oci.core.ComputeClient','get_instance',{'instance_id':iid},['lifecycle_state','agent_config','metadata'])
+                  data=ins.get('data') or {}
+                  ac=data.get('agent_config') or {}
+                  print('INSTANCE_LIFECYCLE='+str(data.get('lifecycle_state')))
+                  print('AGENT_CONFIG='+json.dumps({'management_disabled':ac.get('is_management_disabled'),'all_plugins_disabled':ac.get('are_all_plugins_disabled'),'plugins':ac.get('plugins_config')},separators=(',',':')))
+                  try:
+                    ps=await invoke(s,'oci.compute_instance_agent.PluginClient','list_instance_agent_plugins',{'compartment_id':os.environ['COMPARTMENT'],'instanceagent_id':iid},['name','status'],100)
+                    print('PLUGIN_LIST='+json.dumps(items(ps),separators=(',',':')))
+                  except Exception as e:
+                    print('PLUGIN_QUERY_ERROR='+str(e).replace('\n',' ')[:1200])
           asyncio.run(main())
           PY
-
-      - name: Verify WAHA and initialize nitu-travels session
-        shell: bash
-        env:
-          DOMAIN: ${{ vars.GATEWAY_DOMAIN || 'wa.nitutravels.in' }}
-          API_KEY: ${{ secrets.GATEWAY_API_KEY }}
-        run: |
-          set -Eeuo pipefail
-          public_ip="$(cat /tmp/oracle-public-ip)"
-          curl_base=(--silent --show-error --connect-timeout 8 --max-time 25 --resolve "$DOMAIN:443:$public_ip")
-          for attempt in $(seq 1 90); do
-            health_code="$(curl "${curl_base[@]}" -o /tmp/health.json -w '%{http_code}' "https://$DOMAIN/health" || true)"
-            session_code="$(curl "${curl_base[@]}" -H "X-Api-Key: $API_KEY" -o /tmp/session.json -w '%{http_code}' "https://$DOMAIN/api/sessions/nitu-travels" || true)"
-            status="$(jq -r '.status // "unknown"' /tmp/session.json 2>/dev/null || echo unknown)"
-            echo "VERIFY_ATTEMPT=$attempt HEALTH_HTTP=${health_code:-000} SESSION_HTTP=${session_code:-000} STATUS=$status"
-            if [ "$health_code" = 200 ] && [ "$session_code" = 404 ]; then
-              curl "${curl_base[@]}" -H "X-Api-Key: $API_KEY" -H 'Content-Type: application/json' -X POST --data '{"name":"nitu-travels"}' "https://$DOMAIN/api/sessions" >/dev/null || true
-            elif [ "$session_code" = 200 ]; then
-              case "$status" in
-                WORKING|SCAN_QR_CODE|PASSKEY_REQUIRED|PASSKEY_CONFIRMATION_REQUIRED)
-                  echo -n 'FINAL_WAHA_STATUS='
-                  jq -c '{name,status,engine:(.engine.engine // .engine.name // null),me:(if .me then {id:.me.id,pushName:.me.pushName} else null end)}' /tmp/session.json
-                  exit 0
-                  ;;
-                STOPPED)
-                  curl "${curl_base[@]}" -H "X-Api-Key: $API_KEY" -H 'Content-Type: application/json' -X POST --data '{}' "https://$DOMAIN/api/sessions/nitu-travels/start" >/dev/null || true
-                  ;;
-                FAILED)
-                  curl "${curl_base[@]}" -H "X-Api-Key: $API_KEY" -H 'Content-Type: application/json' -X POST --data '{}' "https://$DOMAIN/api/sessions/nitu-travels/restart" >/dev/null || true
-                  ;;
-              esac
-            fi
-            sleep 10
-          done
-          echo 'WAHA did not reach a usable session state.' >&2
-          exit 1
