@@ -1,4 +1,4 @@
-name: Deploy verified WAHA image to existing Oracle VM
+name: Deploy WAHA ARM64 through official Oracle OCI MCP
 
 on:
   workflow_dispatch:
@@ -9,28 +9,25 @@ on:
       - 'Dockerfile'
       - 'docker/waha-entrypoint.sh'
       - 'docker/nitu-waha-supervisor.mjs'
-      - 'scripts/deploy-waha.sh'
       - 'waha-oracle/METADATA-DEPLOY'
-  pull_request:
-    branches: [main]
-    paths:
-      - 'waha-oracle/METADATA-DEPLOY-PR'
 
 permissions:
-  contents: write
+  contents: read
   packages: write
 
 concurrency:
-  group: nitu-waha-existing-vm-install
+  group: nitu-waha-official-mcp-production
   cancel-in-progress: true
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     environment: production
-    timeout-minutes: 55
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
+
+      - uses: docker/setup-qemu-action@v4
 
       - uses: docker/setup-buildx-action@v4
 
@@ -40,78 +37,47 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Define immutable image
+      - name: Define immutable ARM64 image
         id: image
-        shell: bash
         run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
 
-      - name: Build and publish x86-64 WAHA wrapper
+      - name: Build and publish WAHA ARM64 wrapper
         uses: docker/build-push-action@v7
         with:
           context: .
-          platforms: linux/amd64
+          platforms: linux/arm64
           push: true
           tags: |
             ${{ steps.image.outputs.name }}
-            ghcr.io/${{ github.repository }}:waha-production
+            ghcr.io/${{ github.repository }}:waha-production-arm64
           provenance: mode=max
           sbom: true
+          cache-from: type=gha,scope=waha-production-arm64
+          cache-to: type=gha,mode=max,scope=waha-production-arm64
 
-      - name: Verify public pull and smoke-test NOWEB
-        shell: bash
+      - name: Confirm published architecture
         env:
           IMAGE: ${{ steps.image.outputs.name }}
         run: |
           set -Eeuo pipefail
-          docker logout ghcr.io >/dev/null 2>&1 || true
-          docker image rm "$IMAGE" >/dev/null 2>&1 || true
-          docker pull "$IMAGE"
-          test "$(docker image inspect "$IMAGE" --format '{{.Architecture}}')" = amd64
+          docker buildx imagetools inspect "$IMAGE" --format '{{json .Image}}' > /tmp/image.json
+          grep -q 'arm64' /tmp/image.json
 
-          api_key='0000000000000000000000000000000000000000'
-          admin_token='1111111111111111111111111111111111111111'
-          mkdir -p /tmp/waha-smoke-data
-          docker run -d --rm --name nitu-waha-smoke \
-            -p 127.0.0.1:3300:3000 \
-            -e API_KEY="$api_key" \
-            -e ADMIN_TOKEN="$admin_token" \
-            -e PUBLIC_BASE_URL='http://127.0.0.1:3300' \
-            -e WEBHOOK_URL='' \
-            -e WEBHOOK_SECRET="$api_key" \
-            -e LOG_LEVEL=warn \
-            -v /tmp/waha-smoke-data:/data \
-            "$IMAGE"
-          trap 'docker logs nitu-waha-smoke 2>&1 | tail -n 200 || true; docker stop nitu-waha-smoke >/dev/null 2>&1 || true' EXIT
-
-          ready=0
-          for attempt in $(seq 1 90); do
-            health_code="$(curl -sS --connect-timeout 3 --max-time 8 -o /tmp/health.json -w '%{http_code}' http://127.0.0.1:3300/health 2>/dev/null || true)"
-            version_code="$(curl -sS --connect-timeout 3 --max-time 8 -H "X-Api-Key: $api_key" -o /tmp/version.json -w '%{http_code}' http://127.0.0.1:3300/api/server/version 2>/dev/null || true)"
-            engine="$(jq -r '.engine // "unknown"' /tmp/version.json 2>/dev/null || echo unknown)"
-            echo "SMOKE_ATTEMPT=$attempt HEALTH=${health_code:-000} VERSION=${version_code:-000} ENGINE=$engine"
-            if [ "$health_code" = 200 ] && [ "$version_code" = 200 ] && [ "$engine" = NOWEB ]; then
-              ready=1
-              break
-            fi
-            sleep 5
-          done
-          [ "$ready" -eq 1 ]
-          docker stop nitu-waha-smoke >/dev/null
-          trap - EXIT
-          echo 'SMOKE_RESULT=success'
-
-      - name: Configure OCI credentials
+      - name: Configure OCI profile and MCP runtime
         shell: bash
         env:
           OCI_PRIVATE_KEY_PEM: ${{ secrets.OCI_PRIVATE_KEY }}
           OCI_FINGERPRINT_VALUE: ${{ secrets.OCI_FINGERPRINT }}
+          OCI_USER_OCID: ${{ secrets.OCI_USER_OCID }}
+          OCI_TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
+          OCI_REGION: ${{ vars.OCI_REGION }}
         run: |
           set -Eeuo pipefail
           mkdir -p "$HOME/.oci"
           python - <<'PY'
           import os
           from pathlib import Path
-          value=os.environ.get('OCI_PRIVATE_KEY_PEM','').strip()
+          value=os.environ['OCI_PRIVATE_KEY_PEM'].strip()
           if len(value)>=2 and value[0]==value[-1] and value[0] in {'"',"'"}:
               value=value[1:-1]
           if '\\n' in value and '\n' not in value:
@@ -119,67 +85,106 @@ jobs:
           Path.home().joinpath('.oci/key.pem').write_text(value.replace('\r','').strip()+'\n')
           PY
           chmod 600 "$HOME/.oci/key.pem"
+          fingerprint="$(printf '%s' "$OCI_FINGERPRINT_VALUE" | tr -d '[:space:]')"
           cat > "$HOME/.oci/config" <<EOF
           [DEFAULT]
-          user=${{ secrets.OCI_USER_OCID }}
-          fingerprint=$(printf '%s' "$OCI_FINGERPRINT_VALUE" | tr -d '[:space:]')
-          tenancy=${{ secrets.OCI_TENANCY_OCID }}
-          region=${{ vars.OCI_REGION }}
+          user=$OCI_USER_OCID
+          fingerprint=$fingerprint
+          tenancy=$OCI_TENANCY_OCID
+          region=$OCI_REGION
           key_file=$HOME/.oci/key.pem
           EOF
           chmod 600 "$HOME/.oci/config"
-          pipx install --quiet oci-cli
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          pipx install --quiet uv
 
-      - name: Resolve Oracle compartment
-        id: oci
+      - name: Pin image and resolve public IP through official OCI MCP
         shell: bash
         env:
-          TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
-          CONFIGURED_COMPARTMENT_OCID: ${{ vars.OCI_COMPARTMENT_OCID }}
+          COMPARTMENT_OCID: ${{ vars.OCI_COMPARTMENT_OCID }}
+          TARGET_IMAGE: ${{ steps.image.outputs.name }}
+          OCI_CONFIG_PROFILE: DEFAULT
+          FASTMCP_LOG_LEVEL: ERROR
         run: |
           set -Eeuo pipefail
-          compartment="$CONFIGURED_COMPARTMENT_OCID"
-          if [[ ! "$compartment" =~ ^ocid1\.compartment\. ]]; then
-            compartment="$(oci iam compartment list \
-              --compartment-id "$TENANCY_OCID" \
-              --compartment-id-in-subtree true \
-              --access-level ANY --all --output json | \
-              jq -r '[.data[] | select(.name=="NituWAGateway" and .["lifecycle-state"]=="ACTIVE") | .id][0] // empty')"
-          fi
-          [[ "$compartment" =~ ^ocid1\.compartment\. ]]
-          echo "compartment=$compartment" >> "$GITHUB_OUTPUT"
+          uv run --with 'mcp>=1.0' python - <<'PY'
+          import asyncio,base64,json,os,re
+          from mcp import ClientSession,StdioServerParameters
+          from mcp.client.stdio import stdio_client
+          def decode(r):
+              t=''.join(getattr(x,'text','') for x in r.content).strip();a=t.find('{');b=t.rfind('}')
+              if a>=0 and b>a:t=t[a:b+1]
+              return json.loads(t)
+          async def invoke(s,c,o,p,fields=None,max_results=None):
+              a={'client_fqn':c,'operation':o,'params':p,'result_mode':'full'}
+              if fields:a['fields']=fields
+              if max_results:a['max_results']=max_results
+              r=await s.call_tool('invoke_oci_api',a)
+              if getattr(r,'isError',False):raise RuntimeError(''.join(getattr(x,'text','') for x in r.content))
+              return decode(r)
+          def items(x):
+              d=x.get('data',[])
+              return d.get('items',d.get('results',[])) if isinstance(d,dict) else d
+          async def main():
+              comp=os.environ['COMPARTMENT_OCID']; image=os.environ['TARGET_IMAGE']
+              server=StdioServerParameters(command='uvx',args=['oracle.oci-cloud-mcp-server@latest'],env={**os.environ,'OCI_CONFIG_PROFILE':'DEFAULT','FASTMCP_LOG_LEVEL':'ERROR'})
+              async with stdio_client(server) as (r,w):
+                async with ClientSession(r,w) as s:
+                  await s.initialize()
+                  ls=await invoke(s,'oci.core.ComputeClient','list_instances',{'compartment_id':comp},['id','display_name','lifecycle_state'],20)
+                  target=next(x for x in items(ls) if x.get('display_name')=='nitu-whatsapp-gateway' and x.get('lifecycle_state')!='TERMINATED')
+                  iid=target['id']
+                  ins=await invoke(s,'oci.core.ComputeClient','get_instance',{'instance_id':iid},['lifecycle_state','metadata'])
+                  data=ins.get('data') or {}; md=dict(data.get('metadata') or {})
+                  encoded=md.get('gateway_env_b64')
+                  if not encoded:raise RuntimeError('gateway_env_b64 metadata is absent')
+                  text=base64.b64decode(encoded).decode('utf-8')
+                  text=re.sub(r'^GATEWAY_IMAGE=.*$',f'GATEWAY_IMAGE={image}',text,flags=re.M) if re.search(r'^GATEWAY_IMAGE=.*$',text,flags=re.M) else f'GATEWAY_IMAGE={image}\n'+text
+                  md['gateway_env_b64']=base64.b64encode(text.encode()).decode()
+                  await invoke(s,'oci.core.ComputeClient','update_instance',{'instance_id':iid,'update_instance_details':{'metadata':md}},['lifecycle_state'])
+                  vas=await invoke(s,'oci.core.ComputeClient','list_vnic_attachments',{'compartment_id':comp,'instance_id':iid},['vnic_id','lifecycle_state'],10)
+                  va=next(x for x in items(vas) if x.get('lifecycle_state')=='ATTACHED')
+                  vr=await invoke(s,'oci.core.VirtualNetworkClient','get_vnic',{'vnic_id':va['vnic_id']},['public_ip'])
+                  ip=(vr.get('data') or {}).get('public_ip')
+                  if not ip:raise RuntimeError('No public IP on gateway VNIC')
+                  open('/tmp/oracle-public-ip','w').write(ip)
+                  print('MCP_INSTANCE_LIFECYCLE='+str(data.get('lifecycle_state')))
+                  print('MCP_IMAGE_PINNED='+image)
+                  print('MCP_PUBLIC_IP='+ip)
+          asyncio.run(main())
+          PY
 
-      - name: Pin verified image through OCI metadata and verify live service
+      - name: Wait for no-reboot metadata sync and initialize WAHA session
         shell: bash
         env:
-          COMPARTMENT_OCID: ${{ steps.oci.outputs.compartment }}
           DOMAIN: ${{ vars.GATEWAY_DOMAIN || 'wa.nitutravels.in' }}
           API_KEY: ${{ secrets.GATEWAY_API_KEY }}
-          IMAGE: ${{ steps.image.outputs.name }}
-          SESSION_NAME: nitu-travels
         run: |
           set -Eeuo pipefail
-          mkdir -p docs
-          chmod 0755 scripts/deploy-waha.sh
-          scripts/deploy-waha.sh 2>&1 | tee docs/waha-metadata-deploy-result.txt
-
-      - name: Persist sanitized deployment result
-        if: always()
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          test -f docs/waha-metadata-deploy-result.txt || echo 'WAHA metadata deployment did not produce a result file.' > docs/waha-metadata-deploy-result.txt
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add docs/waha-metadata-deploy-result.txt
-          git diff --cached --quiet || git commit -m 'Record WAHA metadata deployment result'
-          if [ "${GITHUB_EVENT_NAME}" = pull_request ]; then
-            echo 'Pull-request run: result remains available in Actions logs.'
-            exit 0
-          fi
-          for attempt in 1 2 3 4 5; do
-            git pull --rebase origin main && git push origin HEAD:main && exit 0
-            sleep $((attempt * 5))
+          ip="$(cat /tmp/oracle-public-ip)"
+          c=(--silent --show-error --connect-timeout 8 --max-time 25 --resolve "$DOMAIN:443:$ip")
+          for attempt in $(seq 1 150); do
+            h="$(curl "${c[@]}" -o /tmp/h -w '%{http_code}' "https://$DOMAIN/health" || true)"
+            s="$(curl "${c[@]}" -H "X-Api-Key: $API_KEY" -o /tmp/s -w '%{http_code}' "https://$DOMAIN/api/sessions/nitu-travels" || true)"
+            status="$(jq -r '.status // "unknown"' /tmp/s 2>/dev/null || echo unknown)"
+            echo "VERIFY_ATTEMPT=$attempt HEALTH=$h SESSION=$s STATUS=$status"
+            if [ "$h" = 200 ] && [ "$s" = 404 ]; then
+              curl "${c[@]}" -H "X-Api-Key: $API_KEY" -H 'Content-Type: application/json' -X POST --data '{"name":"nitu-travels"}' "https://$DOMAIN/api/sessions" >/dev/null || true
+            elif [ "$s" = 200 ]; then
+              case "$status" in
+                WORKING|SCAN_QR_CODE|PASSKEY_REQUIRED|PASSKEY_CONFIRMATION_REQUIRED)
+                  echo -n 'FINAL_WAHA_STATUS='
+                  jq -c '{name,status,engine:(.engine.engine // .engine.name // null),me:(if .me then {id:.me.id,pushName:.me.pushName} else null end)}' /tmp/s
+                  exit 0
+                  ;;
+                STOPPED)
+                  curl "${c[@]}" -H "X-Api-Key: $API_KEY" -H 'Content-Type: application/json' -X POST --data '{}' "https://$DOMAIN/api/sessions/nitu-travels/start" >/dev/null || true
+                  ;;
+                FAILED)
+                  curl "${c[@]}" -H "X-Api-Key: $API_KEY" -H 'Content-Type: application/json' -X POST --data '{}' "https://$DOMAIN/api/sessions/nitu-travels/restart" >/dev/null || true
+                  ;;
+              esac
+            fi
+            sleep 10
           done
+          echo 'WAHA did not become healthy after ARM64 metadata deployment.' >&2
           exit 1
