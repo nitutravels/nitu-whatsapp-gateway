@@ -3,8 +3,11 @@ import {
   addEvent,
   claimNextMessage,
   enqueueWebhook,
+  getSetting,
   markFailure,
-  requeueExpiredLeases
+  requeueExpiredLeases,
+  setSetting,
+  stats
 } from './db.js';
 
 function classify(error) {
@@ -25,12 +28,40 @@ export class QueueWorker {
     this.lastLeaseRecoveryAt = 0;
     this.consecutiveFailures = 0;
     this.circuitOpenUntil = 0;
+    const stored = getSetting('queue_paused');
+    if (stored === null) {
+      this.paused = stats().active > 0;
+      this.pauseReason = this.paused ? 'Existing messages require administrator review after transport migration' : '';
+      setSetting('queue_paused', this.paused ? '1' : '0');
+      setSetting('queue_pause_reason', this.pauseReason);
+    } else {
+      this.paused = stored === '1';
+      this.pauseReason = getSetting('queue_pause_reason') || '';
+    }
   }
 
   start() {
     if (this.timer) return;
     requeueExpiredLeases();
     this.timer = setInterval(() => this.tick().catch(error => this.logger.error({ err: error }, 'Queue worker tick failed')), 1000);
+  }
+
+  pause(reason = 'Paused by administrator') {
+    this.paused = true;
+    this.pauseReason = String(reason || 'Paused by administrator').slice(0, 300);
+    setSetting('queue_paused', '1');
+    setSetting('queue_pause_reason', this.pauseReason);
+    return this.status();
+  }
+
+  resume() {
+    this.paused = false;
+    this.pauseReason = '';
+    this.consecutiveFailures = 0;
+    this.circuitOpenUntil = 0;
+    setSetting('queue_paused', '0');
+    setSetting('queue_pause_reason', '');
+    return this.status();
   }
 
   async tick() {
@@ -41,7 +72,7 @@ export class QueueWorker {
       if (recovered) this.logger.warn({ recovered }, 'Recovered expired message leases');
       this.lastLeaseRecoveryAt = now;
     }
-    if (now < this.circuitOpenUntil || !this.transport.isReady()) return;
+    if (this.paused || now < this.circuitOpenUntil || !this.transport.isReady()) return;
     if (now - this.lastSendAt < config.SEND_INTERVAL_MS) return;
 
     const message = claimNextMessage();
@@ -79,6 +110,8 @@ export class QueueWorker {
   status() {
     return {
       busy: this.busy,
+      paused: this.paused,
+      pauseReason: this.pauseReason || null,
       lastSendAt: this.lastSendAt ? new Date(this.lastSendAt).toISOString() : null,
       consecutiveFailures: this.consecutiveFailures,
       circuitOpenUntil: this.circuitOpenUntil > Date.now() ? new Date(this.circuitOpenUntil).toISOString() : null
