@@ -1,36 +1,125 @@
-name: Extract Bastion failure tail
+name: Replace unhealthy Oracle WAHA VM deterministically
 
 on:
   pull_request:
     branches: [main]
 
 permissions:
-  actions: read
   contents: write
+  packages: write
+
+concurrency:
+  group: replace-unhealthy-oracle-waha-vm
+  cancel-in-progress: false
 
 jobs:
-  extract:
+  replace:
     runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 55
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.ref }}
-      - name: Download only the completed job log
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build pinned x86 WAHA replacement image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ghcr.io/nitutravels/nitu-whatsapp-gateway:replacement-${{ github.run_id }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=waha-replacement-amd64
+          cache-to: type=gha,mode=max,scope=waha-replacement-amd64
+
+      - name: Prove the published image is anonymously pullable and healthy
+        shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
-          JOB_ID: '88215224800'
+          IMAGE: ghcr.io/nitutravels/nitu-whatsapp-gateway:replacement-${{ github.run_id }}
+        run: |
+          set -Eeuo pipefail
+          docker logout ghcr.io >/dev/null 2>&1 || true
+          docker pull "$IMAGE"
+          test "$(docker image inspect "$IMAGE" --format '{{.Architecture}}')" = amd64
+          rm -rf /tmp/waha-smoke && mkdir -p /tmp/waha-smoke
+          docker run -d --rm --name nitu-waha-replacement-smoke             -p 127.0.0.1:3300:3000             -e API_KEY=0000000000000000000000000000000000000000             -e ADMIN_TOKEN=1111111111111111111111111111111111111111             -e WEBHOOK_SECRET=2222222222222222222222222222222222222222             -e WEBHOOK_URL=             -e WEBSITE_WORKER_URL=             -e PUBLIC_BASE_URL=http://127.0.0.1:3300             -v /tmp/waha-smoke:/data             "$IMAGE"
+          trap 'docker logs nitu-waha-replacement-smoke 2>&1 | tail -n 200 || true; docker stop nitu-waha-replacement-smoke >/dev/null 2>&1 || true' EXIT
+          for attempt in $(seq 1 30); do
+            code="$(curl -sS --connect-timeout 3 --max-time 8 -o /tmp/smoke-health -w '%{http_code}' http://127.0.0.1:3300/health 2>/dev/null || true)"
+            echo "SMOKE_ATTEMPT=$attempt HTTP=$code"
+            [ "$code" = 200 ] && break
+            [ "$attempt" = 30 ] && exit 1
+            sleep 4
+          done
+          docker stop nitu-waha-replacement-smoke >/dev/null
+          trap - EXIT
+
+      - name: Configure official Oracle OCI MCP
+        shell: bash
+        env:
+          KEY: ${{ secrets.OCI_PRIVATE_KEY }}
+          FP: ${{ secrets.OCI_FINGERPRINT }}
+          USER_OCID: ${{ secrets.OCI_USER_OCID }}
+          TENANCY: ${{ secrets.OCI_TENANCY_OCID }}
+          REGION: ${{ vars.OCI_REGION }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p ~/.oci
+          python -c 'import os,pathlib;v=os.environ["KEY"].strip().strip("\"\047").replace("\\r","").replace("\\n","\n");pathlib.Path.home().joinpath(".oci/key.pem").write_text(v.strip()+"\n")'
+          chmod 600 ~/.oci/key.pem
+          printf '[DEFAULT]\nuser=%s\nfingerprint=%s\ntenancy=%s\nregion=%s\nkey_file=%s/.oci/key.pem\n' "$USER_OCID" "$(echo "$FP" | tr -d '[:space:]')" "$TENANCY" "$REGION" "$HOME" > ~/.oci/config
+          chmod 600 ~/.oci/config
+          pipx install --quiet uv
+
+      - name: Materialize reviewed replacement controller
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cat > /tmp/replace.b64 <<'B64'
+          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
+          B64
+          base64 -d /tmp/replace.b64 | gzip -dc > /tmp/replace_oracle_waha.py
+          python -m py_compile /tmp/replace_oracle_waha.py
+
+      - name: Launch, validate and cut over the clean Oracle replacement
+        id: replace
+        shell: bash
+        env:
+          COMPARTMENT_OCID: ${{ vars.OCI_COMPARTMENT_OCID }}
+          TARGET_IMAGE: ghcr.io/nitutravels/nitu-whatsapp-gateway:replacement-${{ github.run_id }}
+          DOMAIN: ${{ vars.GATEWAY_DOMAIN || 'wa.nitutravels.in' }}
+          REPLACEMENT_NAME: nitu-whatsapp-gateway-waha-${{ github.run_id }}
+          RESULT_PATH: docs/waha-replacement-result.json
+          OCI_CONFIG_PROFILE: DEFAULT
+          FASTMCP_LOG_LEVEL: ERROR
+        run: |
+          set -o pipefail
+          uv run --with 'mcp>=1.0' python /tmp/replace_oracle_waha.py 2>&1 | tee /tmp/replacement.log
+
+      - name: Persist sanitized replacement result
+        if: always()
+        shell: bash
         run: |
           set -Eeuo pipefail
           mkdir -p docs
-          curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' \
-            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/jobs/${JOB_ID}/logs" -o /tmp/job.log
-          tail -n 160 /tmp/job.log \
-            | sed -E 's/(API_KEY|ADMIN_TOKEN|WEBHOOK_SECRET|password|token)=([^[:space:]]+)/\1=***REDACTED***/Ig' \
-            > docs/bastion-failure-tail.txt
-      - name: Persist diagnostic tail
-        run: |
+          if [ ! -f docs/waha-replacement-result.json ]; then
+            echo '{"result":"workflow_failed_before_controller_result"}' > docs/waha-replacement-result.json
+          fi
+          tail -n 250 /tmp/replacement.log 2>/dev/null | sed -E 's/(API_KEY|ADMIN_TOKEN|WEBHOOK_SECRET|POSTGRES_PASSWORD)=([^[:space:]]+)/\1=***REDACTED***/Ig' > docs/waha-replacement-log-tail.txt || true
           git config user.name 'github-actions[bot]'
           git config user.email '4189826+github-actions[bot]@users.noreply.github.com'
-          git add docs/bastion-failure-tail.txt
-          git diff --cached --quiet || git commit -m 'Record Bastion failure tail'
-          git push origin HEAD:${{ github.event.pull_request.head.ref }}
+          git add docs/waha-replacement-result.json docs/waha-replacement-log-tail.txt
+          git diff --cached --quiet || git commit -m 'Record deterministic Oracle WAHA replacement result'
+          git pull --rebase origin "${{ github.event.pull_request.head.ref }}" || true
+          git push origin HEAD:"${{ github.event.pull_request.head.ref }}"
