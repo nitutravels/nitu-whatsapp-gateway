@@ -8,6 +8,7 @@ import {
   healthCheck,
   listInbound,
   listMessages,
+  markFailure,
   retryMessage,
   stats
 } from './db.js';
@@ -91,6 +92,25 @@ export async function registerRoutes(app, transport, queueWorker) {
   app.get('/admin/api/status', { preHandler: requireAdmin }, async () => ({ ...transport.status(), worker: queueWorker.status() }));
   app.get('/admin/api/messages', { preHandler: requireAdmin }, async request => listMessages(request.query.limit, request.query.status || null));
   app.get('/admin/api/inbound', { preHandler: requireAdmin }, async request => listInbound(request.query.limit));
+
+  app.post('/admin/api/queue/pause', { preHandler: requireAdmin }, async request => ({ accepted: true, worker: queueWorker.pause(request.body?.reason || 'Paused by administrator') }));
+  app.post('/admin/api/queue/resume', { preHandler: requireAdmin }, async () => ({ accepted: true, worker: queueWorker.resume() }));
+
+  app.post('/admin/api/messages/cancel-pending', { preHandler: requireAdmin }, async () => {
+    const pending = listMessages(500).filter(message => ['queued', 'retry'].includes(message.status));
+    let cancelled = 0;
+    for (const message of pending) {
+      if (markFailure(message.id, 'Cancelled by administrator before delivery', { retryable: false })) cancelled += 1;
+    }
+    return { accepted: true, cancelled };
+  });
+
+  app.post('/admin/api/messages/:id/cancel', { preHandler: requireAdmin }, async (request, reply) => {
+    const record = getMessage(request.params.id);
+    if (!record || !['queued', 'retry'].includes(record.status)) return reply.code(409).send({ error: 'Only queued or retry messages can be cancelled' });
+    const cancelled = markFailure(record.id, 'Cancelled by administrator before delivery', { retryable: false });
+    return reply.code(202).send(cancelled);
+  });
 
   app.post('/admin/api/messages/:id/retry', { preHandler: requireAdmin }, async (request, reply) => {
     const record = retryMessage(request.params.id);
