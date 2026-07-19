@@ -1,0 +1,12 @@
+Nitu Travels WAHA Core NOWEB Oracle installation
+
+Requested: 2026-07-19
+Target: existing Oracle Ampere ARM gateway VM
+Image base: devlikeapro/waha:noweb-arm-2026.7.1
+Session: nitu-travels
+Rollout: OCI metadata sync without rebooting a running instance
+Storage: persistent /data mount; WAHA session and media subdirectories
+Security: existing API key and administrator token mapped server-side
+Website worker: https://manage.nitutravels.in/whatsapp-dispatch-worker.php
+
+This marker triggers the production WAHA installation workflow.
