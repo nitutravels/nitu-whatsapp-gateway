@@ -1,4 +1,4 @@
-name: Probe WAHA Oracle candidate
+name: Probe and recover WAHA Oracle candidate
 
 on:
   workflow_dispatch:
@@ -17,7 +17,7 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     environment: production
-    timeout-minutes: 10
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v7
       - name: Configure OCI and probe candidate
@@ -71,14 +71,40 @@ jobs:
               ip="$(oci network vnic get --vnic-id "$vnic" --query 'data."public-ip"' --raw-output 2>/dev/null || true)"
               echo "CANDIDATE_PUBLIC_IP=${ip:-none}"
               if [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-                health="$(curl -sS --connect-timeout 5 --max-time 15 -H "Host: $DOMAIN" -o /tmp/h.json -w '%{http_code}' "http://$ip/health" 2>/dev/null || true)"
-                version="$(curl -sS --connect-timeout 5 --max-time 15 -H "Host: $DOMAIN" -H "X-Api-Key: $WAHA_API_KEY" -o /tmp/v.json -w '%{http_code}' "http://$ip/api/server/version" 2>/dev/null || true)"
-                session="$(curl -sS --connect-timeout 5 --max-time 15 -H "Host: $DOMAIN" -H "X-Api-Key: $WAHA_API_KEY" -o /tmp/s.json -w '%{http_code}' "http://$ip/api/sessions/nitu-travels" 2>/dev/null || true)"
+                common=(--silent --show-error --connect-timeout 5 --max-time 20 -H "Host: $DOMAIN")
+                health="$(curl "${common[@]}" -o /tmp/h.json -w '%{http_code}' "http://$ip/health" 2>/dev/null || true)"
+                version="$(curl "${common[@]}" -H "X-Api-Key: $WAHA_API_KEY" -o /tmp/v.json -w '%{http_code}' "http://$ip/api/server/version" 2>/dev/null || true)"
+                session="$(curl "${common[@]}" -H "X-Api-Key: $WAHA_API_KEY" -o /tmp/s.json -w '%{http_code}' "http://$ip/api/sessions/nitu-travels" 2>/dev/null || true)"
+                status="$(jq -r '.status//"UNKNOWN"' /tmp/s.json 2>/dev/null || echo UNKNOWN)"
                 echo "HEALTH_HTTP=${health:-000}"
                 echo "VERSION_HTTP=${version:-000}"
                 echo "SESSION_HTTP=${session:-000}"
                 echo "ENGINE=$(jq -r '.engine//"unknown"' /tmp/v.json 2>/dev/null || echo unknown)"
-                echo "SESSION_STATUS=$(jq -r '.status//"UNKNOWN"' /tmp/s.json 2>/dev/null || echo UNKNOWN)"
+                echo "SESSION_STATUS_BEFORE=$status"
+                jq -c '{name,status,me,engine,error:(.error//null)}' /tmp/s.json 2>/dev/null || true
+
+                if [ "$session" = 200 ] && [ "$status" = FAILED ]; then
+                  echo 'FAILED_SESSION_RESTART_REQUESTED=yes'
+                  restart_code="$(curl "${common[@]}" -H "X-Api-Key: $WAHA_API_KEY" -H 'Content-Type: application/json' \
+                    -X POST -d '{}' -o /tmp/restart.json -w '%{http_code}' "http://$ip/api/sessions/nitu-travels/restart" 2>/dev/null || true)"
+                  echo "RESTART_HTTP=${restart_code:-000}"
+                  for attempt in $(seq 1 36); do
+                    sleep 5
+                    session="$(curl "${common[@]}" -H "X-Api-Key: $WAHA_API_KEY" -o /tmp/s.json -w '%{http_code}' "http://$ip/api/sessions/nitu-travels" 2>/dev/null || true)"
+                    status="$(jq -r '.status//"UNKNOWN"' /tmp/s.json 2>/dev/null || echo UNKNOWN)"
+                    echo "RESTART_CHECK=$attempt SESSION_HTTP=${session:-000} STATUS=$status"
+                    case "$status" in
+                      SCAN_QR|WORKING|STARTING) break ;;
+                    esac
+                  done
+                fi
+                echo "SESSION_STATUS_AFTER=$status"
+                if [ "$status" = SCAN_QR ]; then
+                  qr_code="$(curl "${common[@]}" -H "X-Api-Key: $WAHA_API_KEY" -H 'Accept: application/json' \
+                    -X POST -o /tmp/qr.json -w '%{http_code}' "http://$ip/api/nitu-travels/auth/qr" 2>/dev/null || true)"
+                  echo "QR_HTTP=${qr_code:-000}"
+                  echo "QR_AVAILABLE=$(jq -r '((.data//"")|length)>100' /tmp/qr.json 2>/dev/null || echo false)"
+                fi
               fi
             fi
             echo 'WAHA_CANDIDATE_PROBE_END'
