@@ -5,4 +5,11 @@ Website integration changes:
 - Delivery callbacks include x-api-key in addition to the existing HMAC signature.
 - Bounded POST /api/v1/messages/statuses accepts up to 100 UUIDs for repair synchronization.
 
+Cutover safety:
+- Existing backlog is persistently paused on first v2.1 startup.
+- Administrator may pause or resume delivery explicitly.
+- Individual queued/retry rows may be cancelled before transmission.
+- All queued/retry rows may be cancelled in one guarded action.
+- Pairing WhatsApp does not release stale messages until delivery is resumed.
+
 Companion website release: Manage Nitu Travels v15.10.
