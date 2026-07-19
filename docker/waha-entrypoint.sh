@@ -62,6 +62,5 @@ fi
 # website outbox once per minute. It never stores or prints private keys.
 node /usr/local/lib/nitu-waha-supervisor.mjs &
 
-# The official image provides this entrypoint. Passing the inherited CMD keeps
-# the pinned WAHA release's own startup command intact.
-exec /usr/local/bin/docker-entrypoint.sh "$@"
+# WAHA's official image entrypoint is /entrypoint.sh and starts node dist/main.
+exec /entrypoint.sh "$@"
