@@ -1,8 +1,9 @@
-name: Diagnose Oracle Cloud Agent through official OCI MCP
+name: Persist Oracle MCP diagnostic
 on:
   pull_request:
     branches: [main]
-permissions: {contents: read}
+permissions:
+  contents: write
 concurrency:
   group: official-oracle-mcp-agent-diagnostic
   cancel-in-progress: true
@@ -12,7 +13,10 @@ jobs:
     environment: production
     timeout-minutes: 12
     steps:
-      - name: Oracle MCP diagnostic
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+      - name: Query Oracle through official OCI MCP
         shell: bash
         env:
           KEY: ${{ secrets.OCI_PRIVATE_KEY }}
@@ -25,47 +29,64 @@ jobs:
           FASTMCP_LOG_LEVEL: ERROR
         run: |
           set -Eeuo pipefail
-          mkdir -p ~/.oci
+          mkdir -p ~/.oci docs
           python -c 'import os,pathlib;v=os.environ["KEY"].strip().strip("\"\047").replace("\\r","").replace("\\n","\n");pathlib.Path.home().joinpath(".oci/key.pem").write_text(v.strip()+"\n")'
           chmod 600 ~/.oci/key.pem
           printf '[DEFAULT]\nuser=%s\nfingerprint=%s\ntenancy=%s\nregion=%s\nkey_file=%s/.oci/key.pem\n' "$USER_OCID" "$(echo "$FP"|tr -d '[:space:]')" "$TENANCY" "$REGION" "$HOME" > ~/.oci/config
           chmod 600 ~/.oci/config
           pipx install --quiet uv
           uv run --with 'mcp>=1.0' python - <<'PY'
-          import asyncio,json,os
+          import asyncio,base64,json,os
           from mcp import ClientSession,StdioServerParameters
           from mcp.client.stdio import stdio_client
           def decode(r):
               t=''.join(getattr(x,'text','') for x in r.content).strip(); a=t.find('{'); b=t.rfind('}')
-              if a>=0 and b>a: t=t[a:b+1]
+              if a>=0 and b>a:t=t[a:b+1]
               return json.loads(t)
           async def invoke(s,c,o,p,fields=None,max_results=None):
               a={'client_fqn':c,'operation':o,'params':p,'result_mode':'full'}
               if fields:a['fields']=fields
               if max_results:a['max_results']=max_results
               r=await s.call_tool('invoke_oci_api',a)
-              if getattr(r,'isError',False): raise RuntimeError(''.join(getattr(x,'text','') for x in r.content))
+              if getattr(r,'isError',False):raise RuntimeError(''.join(getattr(x,'text','') for x in r.content))
               return decode(r)
           def items(x):
               d=x.get('data',[])
               return d.get('items',d.get('results',[])) if isinstance(d,dict) else d
           async def main():
+              result={'diagnostic_version':1}
               server=StdioServerParameters(command='uvx',args=['oracle.oci-cloud-mcp-server@latest'],env={**os.environ,'OCI_CONFIG_PROFILE':'DEFAULT','FASTMCP_LOG_LEVEL':'ERROR'})
               async with stdio_client(server) as (r,w):
                 async with ClientSession(r,w) as s:
                   await s.initialize()
                   ls=await invoke(s,'oci.core.ComputeClient','list_instances',{'compartment_id':os.environ['COMPARTMENT']},['id','display_name','lifecycle_state'],20)
                   target=next(x for x in items(ls) if x.get('display_name')=='nitu-whatsapp-gateway' and x.get('lifecycle_state')!='TERMINATED')
-                  iid=target['id']
+                  iid=target['id']; result['instance_id']=iid
                   ins=await invoke(s,'oci.core.ComputeClient','get_instance',{'instance_id':iid},['lifecycle_state','agent_config','metadata'])
-                  data=ins.get('data') or {}
-                  ac=data.get('agent_config') or {}
-                  print('INSTANCE_LIFECYCLE='+str(data.get('lifecycle_state')))
-                  print('AGENT_CONFIG='+json.dumps({'management_disabled':ac.get('is_management_disabled'),'all_plugins_disabled':ac.get('are_all_plugins_disabled'),'plugins':ac.get('plugins_config')},separators=(',',':')))
+                  data=ins.get('data') or {}; ac=data.get('agent_config') or {}; md=data.get('metadata') or {}
+                  result['lifecycle_state']=data.get('lifecycle_state')
+                  result['agent_config']={'is_management_disabled':ac.get('is_management_disabled'),'are_all_plugins_disabled':ac.get('are_all_plugins_disabled'),'plugins_config':ac.get('plugins_config')}
+                  try:
+                    env=base64.b64decode(md.get('gateway_env_b64','')).decode('utf-8')
+                    result['pinned_image']=next((line.split('=',1)[1] for line in env.splitlines() if line.startswith('GATEWAY_IMAGE=')),None)
+                  except Exception as e: result['metadata_error']=str(e)
                   try:
                     ps=await invoke(s,'oci.compute_instance_agent.PluginClient','list_instance_agent_plugins',{'compartment_id':os.environ['COMPARTMENT'],'instanceagent_id':iid},['name','status'],100)
-                    print('PLUGIN_LIST='+json.dumps(items(ps),separators=(',',':')))
-                  except Exception as e:
-                    print('PLUGIN_QUERY_ERROR='+str(e).replace('\n',' ')[:1200])
+                    result['plugins']=items(ps)
+                  except Exception as e: result['plugin_query_error']=str(e)[:2000]
+                  try:
+                    vas=await invoke(s,'oci.core.ComputeClient','list_vnic_attachments',{'compartment_id':os.environ['COMPARTMENT'],'instance_id':iid},['vnic_id','lifecycle_state'],10)
+                    va=next(x for x in items(vas) if x.get('lifecycle_state')=='ATTACHED')
+                    vr=await invoke(s,'oci.core.VirtualNetworkClient','get_vnic',{'vnic_id':va['vnic_id']},['public_ip'])
+                    result['public_ip']=(vr.get('data') or {}).get('public_ip')
+                  except Exception as e: result['vnic_error']=str(e)[:1000]
+              with open('docs/oci-agent-diagnostic.json','w') as f:json.dump(result,f,indent=2,sort_keys=True)
           asyncio.run(main())
           PY
+      - name: Persist diagnostic
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '4189826+github-actions[bot]@users.noreply.github.com'
+          git add docs/oci-agent-diagnostic.json
+          git diff --cached --quiet || git commit -m 'Record Oracle MCP agent diagnostic'
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
