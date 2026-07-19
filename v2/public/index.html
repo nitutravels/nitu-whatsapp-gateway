@@ -28,6 +28,14 @@
         <article class="card"><span>Failed</span><strong id="failed">0</strong><small id="heartbeat">—</small></article>
       </section>
 
+      <section class="card">
+        <div class="sectionHead">
+          <div><h2>Queue safety</h2><p id="queueSafetyText">Pending messages remain stored until delivery is explicitly resumed.</p></div>
+          <div class="actions"><button id="pauseQueue" class="secondary">Pause delivery</button><button id="resumeQueue">Resume delivery</button><button id="cancelPending" class="danger">Cancel queued/retry</button></div>
+        </div>
+        <p class="diagnostic">A new transport release automatically pauses an existing backlog. Review the recipients below before linking WhatsApp or resuming delivery.</p>
+      </section>
+
       <section id="connectCard" class="card">
         <div class="sectionHead">
           <div><h2>Connect WhatsApp</h2><p id="connectionHelp">Readiness is based only on an open authenticated WebSocket.</p></div>
@@ -47,12 +55,12 @@
 
       <section class="card">
         <h2>Send test message</h2>
-        <p>The API accepts the request into SQLite first. Delivery starts only after the WebSocket is open.</p>
+        <p>The API accepts the request into SQLite first. Delivery starts only after the WebSocket is open and the queue is resumed.</p>
         <form id="testForm" class="twoCol"><input id="testTo" inputmode="numeric" placeholder="Recipient with country code" required><textarea id="testText" placeholder="Test message" required></textarea><button>Queue test</button></form>
       </section>
 
       <section class="card">
-        <div class="sectionHead"><div><h2>Recent messages</h2><p>Retries retain the same provider message ID to reduce duplicate delivery.</p></div><button id="refresh" class="secondary">Refresh</button></div>
+        <div class="sectionHead"><div><h2>Recent messages</h2><p>Retries retain the same provider message ID to reduce duplicate delivery. Queued and retry rows may be cancelled before transmission.</p></div><button id="refresh" class="secondary">Refresh</button></div>
         <div class="tableWrap"><table><thead><tr><th>Created</th><th>Recipient</th><th>Status</th><th>Attempts</th><th>Uncertain</th><th>Error</th><th>Action</th></tr></thead><tbody id="messages"></tbody></table></div>
       </section>
     </div>
