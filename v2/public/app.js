@@ -44,7 +44,16 @@ function showDashboard() {
 
 function prettyStatus(status) {
   if (status.ready) return 'Ready';
-  const names = { pairing: 'Pairing required', connecting: 'Connecting', reconnecting: 'Reconnecting', logged_out: 'Logged out', error: 'Error', starting: 'Starting', open: 'Open but unregistered' };
+  const names = {
+    pairing: 'Pairing required',
+    connecting: 'Connecting',
+    reconnecting: 'Reconnecting',
+    logged_out: 'Logged out',
+    error: 'Error',
+    starting: 'Starting',
+    open: 'Open but unregistered',
+    auth_incomplete: status.authRepairInProgress ? 'Rebuilding authentication' : 'Authentication incomplete'
+  };
   return names[status.phase] || status.phase || 'Offline';
 }
 
@@ -55,7 +64,7 @@ async function loadStatus() {
     $('status').textContent = prettyStatus(status);
     $('phase').textContent = `phase: ${status.phase || 'unknown'} · registered: ${status.registered ? 'yes' : 'no'}`;
     $('account').textContent = status.account?.wid || 'Not linked';
-    $('engine').textContent = `${status.engine || 'unknown'} ${status.engineVersion || ''}`;
+    $('engine').textContent = `${status.engine || 'unknown'} ${status.engineVersion || ''}${status.gatewayVersion ? ` · gateway ${status.gatewayVersion}` : ''}`;
     const queue = status.queue || {};
     const worker = status.worker || {};
     $('queued').textContent = (queue.queued || 0) + (queue.retry || 0) + (queue.sending || 0);
