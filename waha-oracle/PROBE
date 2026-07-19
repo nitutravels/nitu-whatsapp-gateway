@@ -1,2 +1,2 @@
-Probe requested: 2026-07-19T12:00Z
-Purpose: observe blue-green WAHA candidate without modifying infrastructure
+Probe requested: 2026-07-19T12:05Z
+Purpose: restart expired FAILED session and verify SCAN_QR without moving the reserved IP
