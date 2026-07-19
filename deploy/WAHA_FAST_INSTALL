@@ -1,4 +1,5 @@
-WAHA_FAST_INSTALL=2026-07-19T00:00:00Z
+WAHA_FAST_INSTALL=2026-07-19T14:00:00Z
 TARGET=Oracle ARM64
 MODE=no-reboot metadata rollout
 IMAGE_BASE=devlikeapro/waha:noweb-arm-2026.7.1
+TRIGGER=established-control-plane-workflow
