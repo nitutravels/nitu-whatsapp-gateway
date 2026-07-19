@@ -5,6 +5,9 @@ on:
   push:
     branches: [main]
     paths: ['waha-oracle/PROBE']
+  pull_request:
+    branches: [main]
+    paths: ['waha-oracle/PROBE-PR']
 
 permissions:
   contents: write
@@ -94,12 +97,12 @@ jobs:
                     status="$(jq -r '.status//"UNKNOWN"' /tmp/s.json 2>/dev/null || echo UNKNOWN)"
                     echo "RESTART_CHECK=$attempt SESSION_HTTP=${session:-000} STATUS=$status"
                     case "$status" in
-                      SCAN_QR|WORKING|STARTING) break ;;
+                      SCAN_QR_CODE|WORKING|STARTING) break ;;
                     esac
                   done
                 fi
                 echo "SESSION_STATUS_AFTER=$status"
-                if [ "$status" = SCAN_QR ]; then
+                if [ "$status" = SCAN_QR_CODE ]; then
                   qr_code="$(curl "${common[@]}" -H "X-Api-Key: $WAHA_API_KEY" -H 'Accept: application/json' \
                     -X POST -o /tmp/qr.json -w '%{http_code}' "http://$ip/api/nitu-travels/auth/qr" 2>/dev/null || true)"
                   echo "QR_HTTP=${qr_code:-000}"
@@ -117,5 +120,9 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add docs/waha-candidate-probe.txt
           git diff --cached --quiet || git commit -m 'Record WAHA candidate probe'
+          if [ "${GITHUB_EVENT_NAME}" = pull_request ]; then
+            echo 'Probe is available in Actions logs.'
+            exit 0
+          fi
           git pull --rebase origin main
           git push origin HEAD:main
