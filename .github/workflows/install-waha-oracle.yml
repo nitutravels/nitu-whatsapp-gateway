@@ -14,7 +14,7 @@ permissions:
 
 concurrency:
   group: nitu-waha-blue-green-install
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   install:
@@ -240,7 +240,7 @@ jobs:
             session_status="$(jq -r '.status // "UNKNOWN"' /tmp/session.json 2>/dev/null || echo UNKNOWN)"
             echo "CANDIDATE_ATTEMPT=$attempt HEALTH=${health_code:-000} VERSION=${version_code:-000} SESSION=${session_code:-000} ENGINE=$engine STATUS=$session_status"
             if [ "$health_code" = 200 ] && [ "$version_code" = 200 ] && [ "$session_code" = 200 ] && [ "$engine" = NOWEB ]; then
-              case "$session_status" in WORKING|SCAN_QR|STARTING|STOPPED) candidate_ready=1; break ;; esac
+              case "$session_status" in WORKING|SCAN_QR_CODE) candidate_ready=1; break ;; esac
             fi
             sleep 10
           done
