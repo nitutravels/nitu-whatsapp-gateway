@@ -343,16 +343,30 @@ curl -fsS --connect-timeout 5 --max-time 30 -H "X-Api-Key: $WAHA_API_KEY" \
   -X POST "http://127.0.0.1:3000/api/sessions/$WAHA_SESSION/start" >/tmp/waha-start.json 2>/dev/null || true
 
 session_status='UNKNOWN'
-for attempt in $(seq 1 60); do
+restart_attempted=0
+for attempt in $(seq 1 90); do
   if curl -fsS --connect-timeout 5 --max-time 15 -H "X-Api-Key: $WAHA_API_KEY" \
       "http://127.0.0.1:3000/api/sessions/$WAHA_SESSION" >/tmp/waha-status.json 2>/dev/null; then
     session_status="$(jq -r '.status // "UNKNOWN"' /tmp/waha-status.json)"
     case "$session_status" in
-      WORKING|SCAN_QR|STARTING|STOPPED) break ;;
+      WORKING|SCAN_QR_CODE) break ;;
+      FAILED|STOPPED)
+        if [ "$restart_attempted" -eq 0 ]; then
+          log "WAHA session is $session_status; requesting one controlled restart"
+          curl -fsS --connect-timeout 5 --max-time 30 -H "X-Api-Key: $WAHA_API_KEY" \
+            -H 'Content-Type: application/json' -X POST -d '{}' \
+            "http://127.0.0.1:3000/api/sessions/$WAHA_SESSION/restart" >/tmp/waha-restart.json 2>/dev/null || true
+          restart_attempted=1
+        fi
+        ;;
     esac
   fi
   sleep 5
 done
+case "$session_status" in
+  WORKING|SCAN_QR_CODE) ;;
+  *) fail "WAHA session did not reach WORKING or SCAN_QR_CODE (last status: $session_status)" ;;
+esac
 
 jq -n \
   --arg installedAt "$(date -u +%FT%TZ)" \
