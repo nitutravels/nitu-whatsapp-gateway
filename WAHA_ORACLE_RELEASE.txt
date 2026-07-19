@@ -1,0 +1,6 @@
+Nitu Travels WAHA Core NOWEB Oracle installation
+Release: 2026-07-19
+Base image: devlikeapro/waha:noweb-2026.7.1
+Session: nitu-travels
+Rollout: immutable GHCR image through OCI metadata, no VM reboot
+Safety: retired gateway data preserved under /data; WAHA uses separate directories
