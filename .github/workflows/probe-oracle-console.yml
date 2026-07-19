@@ -1,0 +1,84 @@
+name: Probe Oracle serial console
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/probe-oracle-console.yml'
+      - 'waha-oracle/CONSOLE-PROBE'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nitu-oracle-console-probe
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v7
+      - name: Capture sanitized Oracle console history
+        shell: bash
+        env:
+          OCI_PRIVATE_KEY_PEM: ${{ secrets.OCI_PRIVATE_KEY }}
+          OCI_FINGERPRINT_VALUE: ${{ secrets.OCI_FINGERPRINT }}
+          TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
+          CONFIGURED_COMPARTMENT_OCID: ${{ vars.OCI_COMPARTMENT_OCID }}
+          REGION: ${{ vars.OCI_REGION }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$HOME/.oci" docs
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          value=os.environ.get('OCI_PRIVATE_KEY_PEM','').strip()
+          if len(value)>=2 and value[0]==value[-1] and value[0] in {'"',"'"}: value=value[1:-1]
+          if '\\n' in value and '\n' not in value: value=value.replace('\\r','').replace('\\n','\n')
+          Path.home().joinpath('.oci/key.pem').write_text(value.replace('\r','').strip()+'\n')
+          PY
+          chmod 600 "$HOME/.oci/key.pem"
+          cat > "$HOME/.oci/config" <<EOF
+          [DEFAULT]
+          user=${{ secrets.OCI_USER_OCID }}
+          fingerprint=$(printf '%s' "$OCI_FINGERPRINT_VALUE" | tr -d '[:space:]')
+          tenancy=$TENANCY_OCID
+          region=$REGION
+          key_file=$HOME/.oci/key.pem
+          EOF
+          chmod 600 "$HOME/.oci/config"
+          pipx install --quiet oci-cli
+          export PATH="$HOME/.local/bin:$PATH"
+          compartment="$CONFIGURED_COMPARTMENT_OCID"
+          if [[ ! "$compartment" =~ ^ocid1\.compartment\. ]]; then
+            compartment="$(oci iam compartment list --compartment-id "$TENANCY_OCID" --compartment-id-in-subtree true --access-level ANY --all --output json | jq -r '[.data[]|select(.name=="NituWAGateway" and .["lifecycle-state"]=="ACTIVE")|.id][0]//empty')"
+          fi
+          instance_id="$(oci compute instance list --compartment-id "$compartment" --display-name nitu-whatsapp-gateway --all --query 'data[?"lifecycle-state"!=`TERMINATED`].id | [0]' --raw-output)"
+          [[ "$instance_id" =~ ^ocid1\.instance\. ]] || { echo 'Instance not found' > docs/oracle-console-probe.txt; exit 1; }
+          history_id="$(oci compute console-history capture --instance-id "$instance_id" --query 'data.id' --raw-output)"
+          oci compute console-history get --instance-console-history-id "$history_id" --wait-for-state SUCCEEDED --max-wait-seconds 300 >/dev/null
+          oci compute console-history get-content --instance-console-history-id "$history_id" --file /tmp/console.log
+          {
+            echo 'ORACLE_CONSOLE_PROBE_BEGIN'
+            echo "PROBED_AT=$(date -u +%FT%TZ)"
+            echo "INSTANCE_ID=$instance_id"
+            tail -n 400 /tmp/console.log | sed -E \
+              -e 's/(API_KEY|ADMIN_TOKEN|WEBHOOK_SECRET|PASSWORD|TOKEN)=([^[:space:]]+)/\1=[REDACTED]/g' \
+              -e 's/(X-Api-Key: )[A-Za-z0-9._-]+/\1[REDACTED]/g' \
+              -e 's#https://objectstorage\.[^[:space:]]+#https://objectstorage/[REDACTED]#g'
+            echo 'ORACLE_CONSOLE_PROBE_END'
+          } > docs/oracle-console-probe.txt
+      - name: Persist console probe
+        if: always()
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/oracle-console-probe.txt
+          git diff --cached --quiet || git commit -m 'Record sanitized Oracle console probe'
+          git pull --rebase origin main
+          git push origin HEAD:main
