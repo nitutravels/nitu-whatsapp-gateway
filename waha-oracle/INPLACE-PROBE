@@ -1,2 +1,2 @@
-Probe requested: 2026-07-19T12:30Z
-Purpose: observe reversible in-place WAHA installation without modifying Oracle
+Probe requested: 2026-07-19T12:31Z
+Purpose: identify attached boot volume and lifecycle after Oracle 409 modification conflict
