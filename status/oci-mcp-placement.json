@@ -1,0 +1,27 @@
+{
+  "region": "ap-mumbai-1",
+  "generated_at": "2026-07-21T16:13:33Z",
+  "purpose": "MCP placement inventory; no OCI resources modified",
+  "instances": [
+    {
+      "display_name": "NAMS-Lightpanda-Agent",
+      "lifecycle_state": "TERMINATED",
+      "shape": "VM.Standard.A1.Flex",
+      "availability_domain": "BXVV:AP-MUMBAI-1-AD-1",
+      "ocpus": 2.0,
+      "memory_gbs": 8.0,
+      "public_ips": []
+    },
+    {
+      "display_name": "NituTravelsWAHA-20260719T184923Z",
+      "lifecycle_state": "RUNNING",
+      "shape": "VM.Standard.A1.Flex",
+      "availability_domain": "BXVV:AP-MUMBAI-1-AD-1",
+      "ocpus": 2.0,
+      "memory_gbs": 8.0,
+      "public_ips": [
+        "137.23.58.166"
+      ]
+    }
+  ]
+}
