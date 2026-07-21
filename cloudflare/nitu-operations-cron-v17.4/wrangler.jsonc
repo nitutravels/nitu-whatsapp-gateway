@@ -1,0 +1,16 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "nitu-operations-cron",
+  "main": "src/index.js",
+  "compatibility_date": "2026-07-21",
+  "observability": {
+    "enabled": true
+  },
+  "vars": {
+    "NITU_WHATSAPP_ENDPOINT": "https://manage.nitutravels.in/whatsapp-dispatch-worker.php",
+    "NITU_TBTRACK_ENDPOINT": "https://manage.nitutravels.in/tbtrack-sync-worker.php"
+  },
+  "triggers": {
+    "crons": ["* * * * *"]
+  }
+}
