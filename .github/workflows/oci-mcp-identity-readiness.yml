@@ -12,6 +12,9 @@ permissions:
   contents: write
   actions: read
 
+env:
+  AUDIT_REVISION: identity-readiness-v1
+
 concurrency:
   group: oci-mcp-identity-readiness
   cancel-in-progress: true
