@@ -12,6 +12,9 @@ permissions:
   contents: write
   actions: read
 
+env:
+  AUDIT_REVISION: run-command-diagnostics-v1
+
 jobs:
   diagnose:
     runs-on: ubuntu-latest
