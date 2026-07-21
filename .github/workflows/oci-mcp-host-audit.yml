@@ -12,6 +12,9 @@ permissions:
   contents: write
   actions: read
 
+env:
+  AUDIT_REVISION: host-capacity-v1
+
 concurrency:
   group: oci-mcp-host-capacity-audit
   cancel-in-progress: true
