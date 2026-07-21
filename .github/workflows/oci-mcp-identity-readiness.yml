@@ -1,0 +1,119 @@
+name: Read-only OCI MCP identity readiness
+run-name: OCI MCP identity readiness ${{ github.run_number }}
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/oci-mcp-identity-readiness.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: oci-mcp-identity-readiness
+  cancel-in-progress: true
+
+jobs:
+  readiness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure OCI CLI from existing production secrets
+        shell: bash
+        env:
+          OCI_PRIVATE_KEY_PEM: ${{ secrets.OCI_PRIVATE_KEY }}
+          OCI_FINGERPRINT_VALUE: ${{ secrets.OCI_FINGERPRINT }}
+          OCI_USER_VALUE: ${{ secrets.OCI_USER_OCID }}
+          OCI_TENANCY_VALUE: ${{ secrets.OCI_TENANCY_OCID }}
+          OCI_REGION_VALUE: ${{ vars.OCI_REGION || 'ap-mumbai-1' }}
+        run: |
+          set -Eeuo pipefail
+          for key in OCI_PRIVATE_KEY_PEM OCI_FINGERPRINT_VALUE OCI_USER_VALUE OCI_TENANCY_VALUE; do
+            [ -n "${!key}" ] || { echo "Missing $key" >&2; exit 78; }
+          done
+          mkdir -p "$HOME/.oci"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          value=os.environ['OCI_PRIVATE_KEY_PEM'].strip()
+          if len(value)>=2 and value[0]==value[-1] and value[0] in {'"',"'"}:
+              value=value[1:-1]
+          if '\\n' in value and '\n' not in value:
+              value=value.replace('\\r','').replace('\\n','\n')
+          Path.home().joinpath('.oci/key.pem').write_text(value.replace('\r','').strip()+'\n')
+          PY
+          chmod 600 "$HOME/.oci/key.pem"
+          cat >"$HOME/.oci/config" <<EOF
+          [DEFAULT]
+          user=$OCI_USER_VALUE
+          fingerprint=$(printf '%s' "$OCI_FINGERPRINT_VALUE" | tr -d '[:space:]')
+          tenancy=$OCI_TENANCY_VALUE
+          region=$OCI_REGION_VALUE
+          key_file=$HOME/.oci/key.pem
+          EOF
+          chmod 600 "$HOME/.oci/config"
+          pipx install --quiet oci-cli
+          echo "$HOME/.local/bin" >>"$GITHUB_PATH"
+
+      - name: Audit identity-domain readiness without changes
+        shell: bash
+        env:
+          OCI_REGION: ${{ vars.OCI_REGION || 'ap-mumbai-1' }}
+          OCI_TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p status
+          domains="$(oci iam domain list --region "$OCI_REGION" --compartment-id "$OCI_TENANCY_OCID" --all)"
+          selected="$(jq -c '[.data[] | select(."lifecycle-state"=="ACTIVE")] | (map(select(.type=="DEFAULT")) + .) | first // empty' <<<"$domains")"
+          if [ -z "$selected" ]; then
+            jq -n --arg region "$OCI_REGION" '{region:$region,identity_domain_found:false,can_list_integrated_apps:false,existing_oci_mcp_app:false,reason:"No active identity domain visible to the configured OCI user"}' > status/oci-mcp-identity-readiness.json
+          else
+            endpoint="$(jq -r '."home-region-url" // .url // empty' <<<"$selected")"
+            display_name="$(jq -r '."display-name" // .name // "Default"' <<<"$selected")"
+            domain_type="$(jq -r '.type // "UNKNOWN"' <<<"$selected")"
+            lifecycle_state="$(jq -r '."lifecycle-state" // "UNKNOWN"' <<<"$selected")"
+            can_list=false
+            existing=false
+            list_error=''
+            set +e
+            apps="$(oci identity-domains apps list --endpoint "$endpoint" --count 10 --attributes 'id,displayName,active,clientType,isOAuthClient' --filter 'displayName eq "Nitu OCI MCP"' 2>identity-app-list.err)"
+            rc=$?
+            set -e
+            if [ "$rc" -eq 0 ]; then
+              can_list=true
+              count="$(jq -r '.data.totalResults // .data."total-results" // (.data.Resources | length) // 0' <<<"$apps")"
+              [ "${count:-0}" -gt 0 ] && existing=true
+            else
+              list_error="$(tr '\n' ' ' < identity-app-list.err | sed -E 's/ocid1\.[A-Za-z0-9._:-]+/[redacted-ocid]/g; s/[[:space:]]+/ /g' | cut -c1-400)"
+            fi
+            jq -n \
+              --arg region "$OCI_REGION" \
+              --arg domain_display_name "$display_name" \
+              --arg domain_type "$domain_type" \
+              --arg lifecycle_state "$lifecycle_state" \
+              --arg endpoint_host "$(python3 -c 'from urllib.parse import urlparse; import sys; print(urlparse(sys.argv[1]).hostname or "")' "$endpoint")" \
+              --argjson can_list_integrated_apps "$can_list" \
+              --argjson existing_oci_mcp_app "$existing" \
+              --arg list_error "$list_error" \
+              '{region:$region,identity_domain_found:true,domain_display_name:$domain_display_name,domain_type:$domain_type,lifecycle_state:$lifecycle_state,endpoint_host:$endpoint_host,can_list_integrated_apps:$can_list_integrated_apps,existing_oci_mcp_app:$existing_oci_mcp_app,list_error:$list_error,changes_made:false}' \
+              > status/oci-mcp-identity-readiness.json
+          fi
+          jq . status/oci-mcp-identity-readiness.json
+
+      - name: Record sanitized readiness result
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git pull --rebase origin main
+          git add status/oci-mcp-identity-readiness.json
+          if ! git diff --cached --quiet; then
+            git commit -m "Record OCI MCP identity readiness [skip ci]"
+            git push
+          fi
