@@ -1,5 +1,5 @@
-name: Read-only OCI inventory for MCP placement
-run-name: OCI MCP placement inventory ${{ github.run_number }}
+name: Read-only OCI MCP readiness audit
+run-name: OCI MCP readiness audit ${{ github.run_number }}
 
 on:
   push:
@@ -12,14 +12,17 @@ permissions:
   contents: write
   actions: read
 
+env:
+  AUDIT_REVISION: consolidated-v1
+
 concurrency:
-  group: oci-mcp-placement-inventory
+  group: oci-mcp-readiness-audit
   cancel-in-progress: true
 
 jobs:
-  inventory:
+  audit:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - name: Checkout operations repository
         uses: actions/checkout@v4
@@ -67,28 +70,22 @@ jobs:
           pipx install --quiet oci-cli
           echo "$HOME/.local/bin" >>"$GITHUB_PATH"
 
-      - name: Validate read access
+      - name: Collect consolidated sanitized readiness audit
         shell: bash
         env:
           OCI_REGION: ${{ vars.OCI_REGION || 'ap-mumbai-1' }}
           OCI_TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
+          OCI_COMPARTMENT_OCID: ${{ vars.OCI_COMPARTMENT_OCID || 'ocid1.compartment.oc1..aaaaaaaacufz3wn5ugdwaglqsmkbpzt4szgiiglhd672hpgppgb5ixnc4zma' }}
+          TARGET_PUBLIC_IP: 137.23.58.166
         run: |
           set -Eeuo pipefail
+          mkdir -p status audit
           oci iam region-subscription list --region "$OCI_REGION" --tenancy-id "$OCI_TENANCY_OCID" --all >/dev/null
 
-      - name: Collect sanitized instance inventory
-        shell: bash
-        env:
-          OCI_REGION: ${{ vars.OCI_REGION || 'ap-mumbai-1' }}
-          OCI_COMPARTMENT_OCID: ${{ vars.OCI_COMPARTMENT_OCID || 'ocid1.compartment.oc1..aaaaaaaacufz3wn5ugdwaglqsmkbpzt4szgiiglhd672hpgppgb5ixnc4zma' }}
-        run: |
-          set -Eeuo pipefail
-          mkdir -p status inventory
-          raw="$(mktemp)"
-          oci compute instance list --region "$OCI_REGION" --compartment-id "$OCI_COMPARTMENT_OCID" --all > "$raw"
-          jq -n --arg region "$OCI_REGION" \
-            '{region:$region,generated_at:(now|todate),purpose:"MCP placement inventory; no OCI resources modified",instances:[]}' \
-            > inventory/oci-mcp-placement.json
+          instances_raw="$(mktemp)"
+          oci compute instance list --region "$OCI_REGION" --compartment-id "$OCI_COMPARTMENT_OCID" --all > "$instances_raw"
+          instances='[]'
+          target_instance_id=''
 
           while IFS=$'\t' read -r iid name state shape ad ocpus memory; do
             [ -n "$iid" ] || continue
@@ -98,6 +95,9 @@ jobs:
               ip="$(oci network vnic get --region "$OCI_REGION" --vnic-id "$vnic_id" --query 'data."public-ip"' --raw-output 2>/dev/null || true)"
               if [ -n "$ip" ] && [ "$ip" != null ]; then
                 public_ips="$(jq --arg ip "$ip" '. + [$ip]' <<<"$public_ips")"
+                if [ "$ip" = "$TARGET_PUBLIC_IP" ] && [ "$state" = RUNNING ]; then
+                  target_instance_id="$iid"
+                fi
               fi
             done < <(oci compute vnic-attachment list --region "$OCI_REGION" --compartment-id "$OCI_COMPARTMENT_OCID" --instance-id "$iid" --all | jq -r '.data[]."vnic-id"')
 
@@ -107,30 +107,198 @@ jobs:
               --argjson ocpus "${ocpus:-0}" --argjson memory_gbs "${memory:-0}" \
               --argjson public_ips "$public_ips" \
               '{display_name:$display_name,lifecycle_state:$lifecycle_state,shape:$shape,availability_domain:$availability_domain,ocpus:$ocpus,memory_gbs:$memory_gbs,public_ips:$public_ips}')"
-            jq --argjson item "$item" '.instances += [$item]' inventory/oci-mcp-placement.json > inventory/tmp.json
-            mv inventory/tmp.json inventory/oci-mcp-placement.json
-          done < <(jq -r '.data[] | [.id,."display-name",."lifecycle-state",.shape,."availability-domain",(."shape-config".ocpus // 0),(."shape-config"."memory-in-gbs" // 0)] | @tsv' "$raw")
+            instances="$(jq --argjson item "$item" '. + [$item]' <<<"$instances")"
+          done < <(jq -r '.data[] | [.id,."display-name",."lifecycle-state",.shape,."availability-domain",(."shape-config".ocpus // 0),(."shape-config"."memory-in-gbs" // 0)] | @tsv' "$instances_raw")
 
-          cp inventory/oci-mcp-placement.json status/oci-mcp-placement.json
-          jq . status/oci-mcp-placement.json
+          identity='{}'
+          set +e
+          domains="$(oci iam domain list --region "$OCI_REGION" --compartment-id "$OCI_TENANCY_OCID" --all 2>audit/domain-list.err)"
+          domains_rc=$?
+          set -e
+          if [ "$domains_rc" -ne 0 ]; then
+            err="$(tr '\n' ' ' < audit/domain-list.err | sed -E 's/ocid1\.[A-Za-z0-9._:-]+/[redacted-ocid]/g; s/[[:space:]]+/ /g' | cut -c1-500)"
+            identity="$(jq -n --arg error "$err" '{identity_domain_found:false,can_list_integrated_apps:false,existing_oci_mcp_app:false,error:$error,changes_made:false}')"
+          else
+            selected="$(jq -c '[.data[] | select(."lifecycle-state"=="ACTIVE")] | (map(select(.type=="DEFAULT")) + .) | first // empty' <<<"$domains")"
+            if [ -z "$selected" ]; then
+              identity='{"identity_domain_found":false,"can_list_integrated_apps":false,"existing_oci_mcp_app":false,"error":"No active identity domain visible","changes_made":false}'
+            else
+              endpoint="$(jq -r '."home-region-url" // .url // empty' <<<"$selected")"
+              display_name="$(jq -r '."display-name" // .name // "Default"' <<<"$selected")"
+              domain_type="$(jq -r '.type // "UNKNOWN"' <<<"$selected")"
+              lifecycle_state="$(jq -r '."lifecycle-state" // "UNKNOWN"' <<<"$selected")"
+              endpoint_host="$(python3 -c 'from urllib.parse import urlparse; import sys; print(urlparse(sys.argv[1]).hostname or "")' "$endpoint")"
+              can_list=false
+              existing=false
+              app_error=''
+              set +e
+              apps="$(oci identity-domains apps list --endpoint "$endpoint" --count 10 --attributes 'id,displayName,active,clientType,isOAuthClient' --filter 'displayName eq "Nitu OCI MCP"' 2>audit/app-list.err)"
+              apps_rc=$?
+              set -e
+              if [ "$apps_rc" -eq 0 ]; then
+                can_list=true
+                count="$(jq -r '.data.totalResults // .data."total-results" // (.data.Resources | length) // 0' <<<"$apps")"
+                [ "${count:-0}" -gt 0 ] && existing=true
+              else
+                app_error="$(tr '\n' ' ' < audit/app-list.err | sed -E 's/ocid1\.[A-Za-z0-9._:-]+/[redacted-ocid]/g; s/[[:space:]]+/ /g' | cut -c1-500)"
+              fi
+              identity="$(jq -n \
+                --arg display_name "$display_name" --arg domain_type "$domain_type" \
+                --arg lifecycle_state "$lifecycle_state" --arg endpoint_host "$endpoint_host" \
+                --argjson can_list_integrated_apps "$can_list" --argjson existing_oci_mcp_app "$existing" \
+                --arg error "$app_error" \
+                '{identity_domain_found:true,domain_display_name:$display_name,domain_type:$domain_type,lifecycle_state:$lifecycle_state,endpoint_host:$endpoint_host,can_list_integrated_apps:$can_list_integrated_apps,existing_oci_mcp_app:$existing_oci_mcp_app,error:$error,changes_made:false}')"
+            fi
+          fi
 
-      - name: Record sanitized inventory
+          host='{}'
+          run_command='{}'
+          if [ -z "$target_instance_id" ]; then
+            host='{"audit_completed":false,"error":"Running target instance not found","changes_made":false}'
+            run_command='{"available":false,"error":"Target instance not found"}'
+          else
+            set +e
+            recent="$(oci instance-agent command-execution list --region "$OCI_REGION" --compartment-id "$OCI_COMPARTMENT_OCID" --instance-id "$target_instance_id" --all 2>audit/execution-list.err)"
+            recent_rc=$?
+            set -e
+            if [ "$recent_rc" -eq 0 ]; then
+              run_command="$(jq '{available:true,recent_executions:[.data | sort_by(."time-created") | reverse | .[0:5][] | {display_name:."display-name",lifecycle_state:."lifecycle-state",delivery_state:."delivery-state",time_created:."time-created",time_updated:."time-updated"}]}' <<<"$recent")"
+            else
+              err="$(tr '\n' ' ' < audit/execution-list.err | sed -E 's/ocid1\.[A-Za-z0-9._:-]+/[redacted-ocid]/g; s/[[:space:]]+/ /g' | cut -c1-500)"
+              run_command="$(jq -n --arg error "$err" '{available:false,error:$error}')"
+            fi
+
+            remote_script=$(cat <<'REMOTE'
+          #!/usr/bin/env bash
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          import json, os, platform, shutil, socket, subprocess
+          def active(name):
+              try:
+                  return subprocess.run(['systemctl','is-active','--quiet',name],check=False).returncode == 0
+              except Exception:
+                  return False
+          mem = {}
+          with open('/proc/meminfo', encoding='utf-8') as f:
+              for line in f:
+                  k, v = line.split(':', 1)
+                  mem[k] = int(v.strip().split()[0])
+          usage = shutil.disk_usage('/')
+          try:
+              load1, load5, load15 = os.getloadavg()
+          except Exception:
+              load1 = load5 = load15 = 0.0
+          s = socket.socket()
+          try:
+              s.bind(('127.0.0.1', 8890)); port_free = True
+          except OSError:
+              port_free = False
+          finally:
+              s.close()
+          containers = 0
+          if shutil.which('docker'):
+              p = subprocess.run(['docker','ps','-q'], text=True, capture_output=True, check=False)
+              containers = len([x for x in p.stdout.splitlines() if x.strip()])
+          print(json.dumps({
+              'audit_completed': True,
+              'hostname': platform.node(),
+              'architecture': platform.machine(),
+              'kernel': platform.release(),
+              'cpu_count': os.cpu_count(),
+              'load_1m': round(load1,3), 'load_5m': round(load5,3), 'load_15m': round(load15,3),
+              'memory_total_mb': round(mem.get('MemTotal',0)/1024,1),
+              'memory_available_mb': round(mem.get('MemAvailable',0)/1024,1),
+              'swap_total_mb': round(mem.get('SwapTotal',0)/1024,1),
+              'swap_free_mb': round(mem.get('SwapFree',0)/1024,1),
+              'root_disk_total_gb': round(usage.total/1024**3,2),
+              'root_disk_free_gb': round(usage.free/1024**3,2),
+              'docker_present': bool(shutil.which('docker')),
+              'docker_active': active('docker.service'),
+              'nginx_active': active('nginx.service'),
+              'caddy_active': active('caddy.service'),
+              'oracle_cloud_agent_active': active('oracle-cloud-agent.service'),
+              'running_container_count': containers,
+              'mcp_loopback_port_8890_free': port_free,
+              'changes_made': False
+          }, separators=(',',':')))
+          PY
+          REMOTE
+            )
+            workdir="$(mktemp -d)"
+            jq -n --arg text "$remote_script" '{source:{sourceType:"TEXT",text:$text},output:{outputType:"TEXT"}}' > "$workdir/content.json"
+            jq -n --arg id "$target_instance_id" '{instanceId:$id}' > "$workdir/target.json"
+            set +e
+            command_id="$(oci instance-agent command create --region "$OCI_REGION" --compartment-id "$OCI_COMPARTMENT_OCID" --content "file://$workdir/content.json" --target "file://$workdir/target.json" --timeout-in-seconds 300 --display-name 'Read-only OCI MCP host readiness audit' --query 'data.id' --raw-output 2>audit/command-create.err)"
+            command_rc=$?
+            set -e
+            if [ "$command_rc" -ne 0 ] || [ -z "$command_id" ]; then
+              err="$(tr '\n' ' ' < audit/command-create.err | sed -E 's/ocid1\.[A-Za-z0-9._:-]+/[redacted-ocid]/g; s/[[:space:]]+/ /g' | cut -c1-500)"
+              host="$(jq -n --arg error "$err" '{audit_completed:false,error:$error,changes_made:false}')"
+            else
+              final_state='UNKNOWN'
+              final_delivery='UNKNOWN'
+              execution='{}'
+              for _ in $(seq 1 60); do
+                set +e
+                execution="$(oci instance-agent command-execution get --region "$OCI_REGION" --command-id "$command_id" --instance-id "$target_instance_id" 2>audit/command-get.err)"
+                get_rc=$?
+                set -e
+                if [ "$get_rc" -ne 0 ]; then
+                  sleep 5
+                  continue
+                fi
+                final_state="$(jq -r '.data."lifecycle-state" // "UNKNOWN"' <<<"$execution")"
+                final_delivery="$(jq -r '.data."delivery-state" // "UNKNOWN"' <<<"$execution")"
+                case "$final_state" in
+                  SUCCEEDED|FAILED|CANCELED|TIMED_OUT) break ;;
+                esac
+                sleep 5
+              done
+              if [ "$final_state" = SUCCEEDED ]; then
+                output_text="$(jq -r 'if (.data.content|type)=="object" then (.data.content.text // .data.content.message // "") else (.data.content // "") end' <<<"$execution")"
+                json_line="$(printf '%s\n' "$output_text" | grep -E '^\{.*\}$' | tail -n 1 || true)"
+                if [ -n "$json_line" ] && jq -e . >/dev/null 2>&1 <<<"$json_line"; then
+                  host="$json_line"
+                else
+                  host="$(jq -n --arg state "$final_state" --arg delivery "$final_delivery" '{audit_completed:false,error:"Run Command succeeded but returned no parseable JSON",lifecycle_state:$state,delivery_state:$delivery,changes_made:false}')"
+                fi
+              else
+                err="$(tr '\n' ' ' < audit/command-get.err 2>/dev/null | sed -E 's/ocid1\.[A-Za-z0-9._:-]+/[redacted-ocid]/g; s/[[:space:]]+/ /g' | cut -c1-500 || true)"
+                host="$(jq -n --arg state "$final_state" --arg delivery "$final_delivery" --arg error "$err" '{audit_completed:false,lifecycle_state:$state,delivery_state:$delivery,error:$error,changes_made:false}')"
+              fi
+              rm -rf "$workdir"
+            fi
+          fi
+
+          jq -n \
+            --arg region "$OCI_REGION" \
+            --arg generated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg revision "$AUDIT_REVISION" \
+            --argjson instances "$instances" \
+            --argjson identity "$identity" \
+            --argjson host "$host" \
+            --argjson run_command "$run_command" \
+            '{region:$region,generated_at:$generated_at,audit_revision:$revision,purpose:"OCI MCP deployment readiness; no OCI resources or IAM configuration modified",instances:$instances,identity_readiness:$identity,host_readiness:$host,run_command_readiness:$run_command,changes_made:false}' \
+            > status/oci-mcp-readiness.json
+          jq . status/oci-mcp-readiness.json
+
+      - name: Record sanitized readiness result
         shell: bash
         run: |
           set -Eeuo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git pull --rebase origin main
-          git add status/oci-mcp-placement.json
+          git add status/oci-mcp-readiness.json
           if ! git diff --cached --quiet; then
-            git commit -m "Record sanitized OCI MCP placement inventory [skip ci]"
+            git commit -m "Record consolidated OCI MCP readiness audit [skip ci]"
             git push
           fi
 
-      - name: Upload private inventory artifact
+      - name: Upload private readiness artifact
         uses: actions/upload-artifact@v4
         with:
-          name: oci-mcp-placement-inventory
-          path: inventory/oci-mcp-placement.json
+          name: oci-mcp-readiness
+          path: status/oci-mcp-readiness.json
           if-no-files-found: error
           retention-days: 7
