@@ -1,0 +1,17 @@
+{
+  "status": "failed",
+  "phase": "launch",
+  "instance_id": "[2026-07-21T10:07:53Z] Deployment failed in phase launch with exit code 1\n[2026-07-21T10:07:57Z] Attempting rollback from preserved boot volume after classified deployment failure\n[2026-07-21T10:09:35Z] Rollback launch could not be completed",
+  "public_ip": "161.118.166.225",
+  "domain": "seo.nitutravels.in",
+  "image_tag": "c74d8660d516e9330a9ad4f24742b10c43c487c4-cdp1",
+  "source_ref": "c74d8660d516e9330a9ad4f24742b10c43c487c4",
+  "old_boot_volume_id": "ocid1.bootvolume.oc1.ap-mumbai-1.abrg6ljr5sw4fabpkxciherbschjpihfob5p5mwzze2f2ppmqijx3eg45z3q",
+  "message": "Deployment failed in phase launch; diagnostics were captured without retrying the same failure",
+  "run_id": "29820744209",
+  "run_url": "https://github.com/nitutravels/nitu-whatsapp-gateway/actions/runs/29820744209",
+  "workflow_outcome": "failure",
+  "dns_ip": "130.210.15.29",
+  "dns_matches_deployment": false,
+  "recorded_at": "2026-07-21T10:11:20Z"
+}
