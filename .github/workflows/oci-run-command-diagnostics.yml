@@ -1,0 +1,97 @@
+name: Sanitized OCI Run Command diagnostics
+run-name: OCI Run Command diagnostics ${{ github.run_number }}
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/oci-run-command-diagnostics.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure OCI CLI
+        shell: bash
+        env:
+          OCI_PRIVATE_KEY_PEM: ${{ secrets.OCI_PRIVATE_KEY }}
+          OCI_FINGERPRINT_VALUE: ${{ secrets.OCI_FINGERPRINT }}
+          OCI_USER_VALUE: ${{ secrets.OCI_USER_OCID }}
+          OCI_TENANCY_VALUE: ${{ secrets.OCI_TENANCY_OCID }}
+          OCI_REGION_VALUE: ${{ vars.OCI_REGION || 'ap-mumbai-1' }}
+        run: |
+          set -Eeuo pipefail
+          for key in OCI_PRIVATE_KEY_PEM OCI_FINGERPRINT_VALUE OCI_USER_VALUE OCI_TENANCY_VALUE; do
+            [ -n "${!key}" ] || { echo "Missing $key" >&2; exit 78; }
+          done
+          mkdir -p "$HOME/.oci"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          value=os.environ['OCI_PRIVATE_KEY_PEM'].strip()
+          if len(value)>=2 and value[0]==value[-1] and value[0] in {'"',"'"}:
+              value=value[1:-1]
+          if '\\n' in value and '\n' not in value:
+              value=value.replace('\\r','').replace('\\n','\n')
+          Path.home().joinpath('.oci/key.pem').write_text(value.replace('\r','').strip()+'\n')
+          PY
+          chmod 600 "$HOME/.oci/key.pem"
+          cat >"$HOME/.oci/config" <<EOF
+          [DEFAULT]
+          user=$OCI_USER_VALUE
+          fingerprint=$(printf '%s' "$OCI_FINGERPRINT_VALUE" | tr -d '[:space:]')
+          tenancy=$OCI_TENANCY_VALUE
+          region=$OCI_REGION_VALUE
+          key_file=$HOME/.oci/key.pem
+          EOF
+          chmod 600 "$HOME/.oci/config"
+          pipx install --quiet oci-cli
+          echo "$HOME/.local/bin" >>"$GITHUB_PATH"
+
+      - name: Collect recent command execution summaries
+        shell: bash
+        env:
+          OCI_REGION: ${{ vars.OCI_REGION || 'ap-mumbai-1' }}
+          OCI_COMPARTMENT_OCID: ${{ vars.OCI_COMPARTMENT_OCID || 'ocid1.compartment.oc1..aaaaaaaacufz3wn5ugdwaglqsmkbpzt4szgiiglhd672hpgppgb5ixnc4zma' }}
+          TARGET_PUBLIC_IP: 137.23.58.166
+        run: |
+          set -Eeuo pipefail
+          mkdir -p status
+          instance_id=''
+          while IFS= read -r iid; do
+            [ -n "$iid" ] || continue
+            while IFS= read -r vnic_id; do
+              [ -n "$vnic_id" ] || continue
+              ip="$(oci network vnic get --region "$OCI_REGION" --vnic-id "$vnic_id" --query 'data."public-ip"' --raw-output 2>/dev/null || true)"
+              if [ "$ip" = "$TARGET_PUBLIC_IP" ]; then
+                instance_id="$iid"
+                break 2
+              fi
+            done < <(oci compute vnic-attachment list --region "$OCI_REGION" --compartment-id "$OCI_COMPARTMENT_OCID" --instance-id "$iid" --all | jq -r '.data[]."vnic-id"')
+          done < <(oci compute instance list --region "$OCI_REGION" --compartment-id "$OCI_COMPARTMENT_OCID" --all | jq -r '.data[] | select(."lifecycle-state"=="RUNNING") | .id')
+          [ -n "$instance_id" ] || { echo 'WAHA instance not found.' >&2; exit 3; }
+
+          executions="$(oci instance-agent command-execution list --region "$OCI_REGION" --compartment-id "$OCI_COMPARTMENT_OCID" --instance-id "$instance_id" --all)"
+          jq '{generated_at:(now|todate),executions:[.data | sort_by(."time-created") | reverse | .[0:10][] | {display_name:."display-name",lifecycle_state:."lifecycle-state",delivery_state:."delivery-state",time_created:."time-created",time_updated:."time-updated",exit_code:(.content."exit-code" // null),message:(.content.message // null),output_type:(.content."output-type" // null)}]}' <<<"$executions" > status/oci-run-command-diagnostics.json
+          jq . status/oci-run-command-diagnostics.json
+
+      - name: Record sanitized diagnostics
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git pull --rebase origin main
+          git add status/oci-run-command-diagnostics.json
+          if ! git diff --cached --quiet; then
+            git commit -m "Record sanitized OCI Run Command diagnostics [skip ci]"
+            git push
+          fi
