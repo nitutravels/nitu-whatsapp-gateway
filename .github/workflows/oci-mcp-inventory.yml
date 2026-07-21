@@ -1,0 +1,130 @@
+name: Read-only OCI inventory for MCP placement
+run-name: OCI MCP placement inventory ${{ github.run_number }}
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/oci-mcp-inventory.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: oci-mcp-placement-inventory
+  cancel-in-progress: true
+
+jobs:
+  inventory:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 20
+    steps:
+      - name: Configure OCI CLI from existing production secrets
+        shell: bash
+        env:
+          OCI_PRIVATE_KEY_PEM: ${{ secrets.OCI_PRIVATE_KEY }}
+          OCI_FINGERPRINT_VALUE: ${{ secrets.OCI_FINGERPRINT }}
+          OCI_USER_VALUE: ${{ secrets.OCI_USER_OCID }}
+          OCI_TENANCY_VALUE: ${{ secrets.OCI_TENANCY_OCID }}
+          OCI_REGION_VALUE: ${{ vars.OCI_REGION || 'ap-mumbai-1' }}
+        run: |
+          set -Eeuo pipefail
+          missing=()
+          [ -n "$OCI_PRIVATE_KEY_PEM" ] || missing+=(OCI_PRIVATE_KEY)
+          [ -n "$OCI_FINGERPRINT_VALUE" ] || missing+=(OCI_FINGERPRINT)
+          [ -n "$OCI_USER_VALUE" ] || missing+=(OCI_USER_OCID)
+          [ -n "$OCI_TENANCY_VALUE" ] || missing+=(OCI_TENANCY_OCID)
+          if [ ${#missing[@]} -gt 0 ]; then
+            printf 'Missing OCI secrets: %s\n' "${missing[*]}" >&2
+            exit 78
+          fi
+          mkdir -p "$HOME/.oci"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          value=os.environ['OCI_PRIVATE_KEY_PEM'].strip()
+          if len(value)>=2 and value[0]==value[-1] and value[0] in {'"',"'"}:
+              value=value[1:-1]
+          if '\\n' in value and '\n' not in value:
+              value=value.replace('\\r','').replace('\\n','\n')
+          Path.home().joinpath('.oci/key.pem').write_text(value.replace('\r','').strip()+'\n')
+          PY
+          chmod 600 "$HOME/.oci/key.pem"
+          cat >"$HOME/.oci/config" <<EOF
+          [DEFAULT]
+          user=$OCI_USER_VALUE
+          fingerprint=$(printf '%s' "$OCI_FINGERPRINT_VALUE" | tr -d '[:space:]')
+          tenancy=$OCI_TENANCY_VALUE
+          region=$OCI_REGION_VALUE
+          key_file=$HOME/.oci/key.pem
+          EOF
+          chmod 600 "$HOME/.oci/config"
+          pipx install --quiet oci-cli
+          echo "$HOME/.local/bin" >>"$GITHUB_PATH"
+
+      - name: Validate read access
+        shell: bash
+        env:
+          OCI_REGION: ${{ vars.OCI_REGION || 'ap-mumbai-1' }}
+          OCI_TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
+        run: |
+          set -Eeuo pipefail
+          oci iam region-subscription list --region "$OCI_REGION" --tenancy-id "$OCI_TENANCY_OCID" --all >/dev/null
+
+      - name: Collect instance and network inventory
+        shell: bash
+        env:
+          OCI_REGION: ${{ vars.OCI_REGION || 'ap-mumbai-1' }}
+          OCI_COMPARTMENT_OCID: ${{ vars.OCI_COMPARTMENT_OCID || 'ocid1.compartment.oc1..aaaaaaaacufz3wn5ugdwaglqsmkbpzt4szgiiglhd672hpgppgb5ixnc4zma' }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p inventory
+          raw="$(mktemp)"
+          oci compute instance list \
+            --region "$OCI_REGION" \
+            --compartment-id "$OCI_COMPARTMENT_OCID" \
+            --all > "$raw"
+
+          jq -n --arg region "$OCI_REGION" --arg compartment_id "$OCI_COMPARTMENT_OCID" \
+            '{region:$region,compartment_id:$compartment_id,generated_at:(now|todate),instances:[]}' \
+            > inventory/oci-mcp-placement.json
+
+          while IFS=$'\t' read -r iid name state shape ad ocpus memory; do
+            [ -n "$iid" ] || continue
+            vnics='[]'
+            while IFS= read -r vnic_id; do
+              [ -n "$vnic_id" ] || continue
+              vnic="$(oci network vnic get --region "$OCI_REGION" --vnic-id "$vnic_id" 2>/dev/null || true)"
+              [ -n "$vnic" ] || continue
+              one="$(jq '{id:.data.id,display_name:.data."display-name",private_ip:.data."private-ip",public_ip:.data."public-ip",subnet_id:.data."subnet-id",is_primary:.data."is-primary",lifecycle_state:.data."lifecycle-state"}' <<<"$vnic")"
+              vnics="$(jq --argjson item "$one" '. + [$item]' <<<"$vnics")"
+            done < <(oci compute vnic-attachment list --region "$OCI_REGION" --compartment-id "$OCI_COMPARTMENT_OCID" --instance-id "$iid" --all | jq -r '.data[]."vnic-id"')
+
+            agent='{}'
+            agent_raw="$(oci instance-agent plugin list --region "$OCI_REGION" --compartment-id "$OCI_COMPARTMENT_OCID" --instanceagent-id "$iid" 2>/dev/null || true)"
+            if [ -n "$agent_raw" ]; then
+              agent="$(jq '{plugins:[.data[]? | {name:.name,status:.status,"desired-state":."desired-state"}]}' <<<"$agent_raw")"
+            fi
+
+            item="$(jq -n \
+              --arg id "$iid" --arg display_name "$name" --arg lifecycle_state "$state" \
+              --arg shape "$shape" --arg availability_domain "$ad" \
+              --argjson ocpus "${ocpus:-0}" --argjson memory_gbs "${memory:-0}" \
+              --argjson vnics "$vnics" --argjson agent "$agent" \
+              '{id:$id,display_name:$display_name,lifecycle_state:$lifecycle_state,shape:$shape,availability_domain:$availability_domain,ocpus:$ocpus,memory_gbs:$memory_gbs,vnics:$vnics,agent:$agent}')"
+            jq --argjson item "$item" '.instances += [$item]' inventory/oci-mcp-placement.json > inventory/tmp.json
+            mv inventory/tmp.json inventory/oci-mcp-placement.json
+          done < <(jq -r '.data[] | [.id,."display-name",."lifecycle-state",.shape,."availability-domain",(."shape-config".ocpus // 0),(."shape-config"."memory-in-gbs" // 0)] | @tsv' "$raw")
+
+          jq . inventory/oci-mcp-placement.json
+
+      - name: Upload private inventory artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: oci-mcp-placement-inventory
+          path: inventory/oci-mcp-placement.json
+          if-no-files-found: error
+          retention-days: 7
