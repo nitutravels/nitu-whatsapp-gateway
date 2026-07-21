@@ -1,0 +1,3 @@
+Capacity-aware NAMS production recovery trigger.
+Controller: nams-deploy/deploy-capacity-aware.sh
+Baseline: bf946667cf7d77932f26511a5ccb54fadac87906
