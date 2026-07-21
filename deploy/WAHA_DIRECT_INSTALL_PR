@@ -1,0 +1,4 @@
+WAHA_DIRECT_INSTALL_PR=2026-07-19T14:40:00Z
+TARGET=Oracle ARM64
+IMAGE=devlikeapro/waha:noweb-arm-2026.7.1
+MODE=observable no-build no-reboot
