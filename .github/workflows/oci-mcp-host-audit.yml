@@ -1,0 +1,203 @@
+name: Read-only OCI MCP host capacity audit
+run-name: OCI MCP host audit ${{ github.run_number }}
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/oci-mcp-host-audit.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: oci-mcp-host-capacity-audit
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure OCI CLI
+        shell: bash
+        env:
+          OCI_PRIVATE_KEY_PEM: ${{ secrets.OCI_PRIVATE_KEY }}
+          OCI_FINGERPRINT_VALUE: ${{ secrets.OCI_FINGERPRINT }}
+          OCI_USER_VALUE: ${{ secrets.OCI_USER_OCID }}
+          OCI_TENANCY_VALUE: ${{ secrets.OCI_TENANCY_OCID }}
+          OCI_REGION_VALUE: ${{ vars.OCI_REGION || 'ap-mumbai-1' }}
+        run: |
+          set -Eeuo pipefail
+          for key in OCI_PRIVATE_KEY_PEM OCI_FINGERPRINT_VALUE OCI_USER_VALUE OCI_TENANCY_VALUE; do
+            [ -n "${!key}" ] || { echo "Missing $key" >&2; exit 78; }
+          done
+          mkdir -p "$HOME/.oci"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          value=os.environ['OCI_PRIVATE_KEY_PEM'].strip()
+          if len(value)>=2 and value[0]==value[-1] and value[0] in {'"',"'"}:
+              value=value[1:-1]
+          if '\\n' in value and '\n' not in value:
+              value=value.replace('\\r','').replace('\\n','\n')
+          Path.home().joinpath('.oci/key.pem').write_text(value.replace('\r','').strip()+'\n')
+          PY
+          chmod 600 "$HOME/.oci/key.pem"
+          cat >"$HOME/.oci/config" <<EOF
+          [DEFAULT]
+          user=$OCI_USER_VALUE
+          fingerprint=$(printf '%s' "$OCI_FINGERPRINT_VALUE" | tr -d '[:space:]')
+          tenancy=$OCI_TENANCY_VALUE
+          region=$OCI_REGION_VALUE
+          key_file=$HOME/.oci/key.pem
+          EOF
+          chmod 600 "$HOME/.oci/config"
+          pipx install --quiet oci-cli
+          echo "$HOME/.local/bin" >>"$GITHUB_PATH"
+
+      - name: Run non-mutating capacity audit through Oracle Cloud Agent
+        shell: bash
+        env:
+          OCI_REGION: ${{ vars.OCI_REGION || 'ap-mumbai-1' }}
+          OCI_COMPARTMENT_OCID: ${{ vars.OCI_COMPARTMENT_OCID || 'ocid1.compartment.oc1..aaaaaaaacufz3wn5ugdwaglqsmkbpzt4szgiiglhd672hpgppgb5ixnc4zma' }}
+          TARGET_PUBLIC_IP: 137.23.58.166
+        run: |
+          set -Eeuo pipefail
+          mkdir -p status audit
+          instance_id=''
+          while IFS=$'\t' read -r iid; do
+            [ -n "$iid" ] || continue
+            while IFS= read -r vnic_id; do
+              [ -n "$vnic_id" ] || continue
+              ip="$(oci network vnic get --region "$OCI_REGION" --vnic-id "$vnic_id" --query 'data."public-ip"' --raw-output 2>/dev/null || true)"
+              if [ "$ip" = "$TARGET_PUBLIC_IP" ]; then
+                instance_id="$iid"
+                break 2
+              fi
+            done < <(oci compute vnic-attachment list --region "$OCI_REGION" --compartment-id "$OCI_COMPARTMENT_OCID" --instance-id "$iid" --all | jq -r '.data[]."vnic-id"')
+          done < <(oci compute instance list --region "$OCI_REGION" --compartment-id "$OCI_COMPARTMENT_OCID" --all | jq -r '.data[] | select(."lifecycle-state"=="RUNNING") | [.id] | @tsv')
+          [ -n "$instance_id" ] || { echo 'Running WAHA instance not found.' >&2; exit 3; }
+
+          remote_script=$(cat <<'REMOTE'
+          #!/usr/bin/env bash
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          import json, os, platform, shutil, socket, subprocess
+
+          def active(name):
+              try:
+                  return subprocess.run(['systemctl','is-active','--quiet',name],check=False).returncode == 0
+              except Exception:
+                  return False
+
+          mem = {}
+          with open('/proc/meminfo', encoding='utf-8') as f:
+              for line in f:
+                  k, v = line.split(':', 1)
+                  mem[k] = int(v.strip().split()[0])
+          usage = shutil.disk_usage('/')
+          try:
+              load1, load5, load15 = os.getloadavg()
+          except Exception:
+              load1 = load5 = load15 = 0.0
+          s = socket.socket()
+          try:
+              s.bind(('127.0.0.1', 8890))
+              port_free = True
+          except OSError:
+              port_free = False
+          finally:
+              s.close()
+          container_count = 0
+          if shutil.which('docker'):
+              p = subprocess.run(['docker','ps','-q'], text=True, capture_output=True, check=False)
+              container_count = len([x for x in p.stdout.splitlines() if x.strip()])
+          result = {
+              'hostname': platform.node(),
+              'architecture': platform.machine(),
+              'kernel': platform.release(),
+              'cpu_count': os.cpu_count(),
+              'load_1m': round(load1, 3),
+              'load_5m': round(load5, 3),
+              'load_15m': round(load15, 3),
+              'memory_total_mb': round(mem.get('MemTotal', 0) / 1024, 1),
+              'memory_available_mb': round(mem.get('MemAvailable', 0) / 1024, 1),
+              'swap_total_mb': round(mem.get('SwapTotal', 0) / 1024, 1),
+              'swap_free_mb': round(mem.get('SwapFree', 0) / 1024, 1),
+              'root_disk_total_gb': round(usage.total / 1024**3, 2),
+              'root_disk_free_gb': round(usage.free / 1024**3, 2),
+              'docker_present': bool(shutil.which('docker')),
+              'podman_present': bool(shutil.which('podman')),
+              'uv_present': bool(shutil.which('uv')),
+              'python3_present': bool(shutil.which('python3')),
+              'running_container_count': container_count,
+              'docker_active': active('docker.service'),
+              'nginx_active': active('nginx.service'),
+              'caddy_active': active('caddy.service'),
+              'oracle_cloud_agent_active': active('oracle-cloud-agent.service'),
+              'mcp_loopback_port_8890_free': port_free,
+              'audit_only': True
+          }
+          print(json.dumps(result, separators=(',', ':')))
+          PY
+          REMOTE
+          )
+
+          workdir="$(mktemp -d)"
+          trap 'rm -rf "$workdir"' EXIT
+          jq -n --arg text "$remote_script" '{source:{sourceType:"TEXT",text:$text},output:{outputType:"TEXT"}}' > "$workdir/content.json"
+          jq -n --arg id "$instance_id" '{instanceId:$id}' > "$workdir/target.json"
+          command_id="$(oci instance-agent command create \
+            --region "$OCI_REGION" \
+            --compartment-id "$OCI_COMPARTMENT_OCID" \
+            --content "file://$workdir/content.json" \
+            --target "file://$workdir/target.json" \
+            --timeout-in-seconds 300 \
+            --display-name 'Read-only OCI MCP host capacity audit' \
+            --query 'data.id' --raw-output)"
+
+          for _ in $(seq 1 45); do
+            result="$(oci instance-agent command-execution get --region "$OCI_REGION" --command-id "$command_id" --instance-id "$instance_id")"
+            state="$(jq -r '.data."lifecycle-state" // "UNKNOWN"' <<<"$result")"
+            case "$state" in
+              SUCCEEDED)
+                text="$(jq -r '.data.content.text // empty' <<<"$result")"
+                [ -n "$text" ] || { jq . <<<"$result"; echo 'Audit returned no text.' >&2; exit 4; }
+                printf '%s\n' "$text" | tail -n 1 | jq . > audit/oci-mcp-host-audit.json
+                cp audit/oci-mcp-host-audit.json status/oci-mcp-host-audit.json
+                break
+                ;;
+              FAILED|CANCELED|TIMED_OUT)
+                jq . <<<"$result"
+                exit 5
+                ;;
+            esac
+            sleep 10
+          done
+          [ -s status/oci-mcp-host-audit.json ] || { echo 'Audit did not complete.' >&2; exit 6; }
+          jq . status/oci-mcp-host-audit.json
+
+      - name: Record sanitized host audit
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git pull --rebase origin main
+          git add status/oci-mcp-host-audit.json
+          if ! git diff --cached --quiet; then
+            git commit -m "Record sanitized OCI MCP host audit [skip ci]"
+            git push
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: oci-mcp-host-audit
+          path: audit/oci-mcp-host-audit.json
+          if-no-files-found: error
+          retention-days: 7
