@@ -1,0 +1,189 @@
+name: Guarded scheduled NAMS recovery
+run-name: Guarded NAMS recovery ${{ github.run_number }}
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: read
+  actions: read
+
+concurrency:
+  group: nams-production-via-waha-repository
+  cancel-in-progress: false
+
+env:
+  NAMS_SOURCE_REF: c74d8660d516e9330a9ad4f24742b10c43c487c4
+  NAMS_IMAGE_TAG: c74d8660d516e9330a9ad4f24742b10c43c487c4-cdp1
+  NAMS_INSTALLER_REF: 1bf9e499c3d501cd9740ce5ac7af3bfd48c39f2c
+  NAMS_APP_IMAGE: ghcr.io/nitutravels/nams-v6-app
+  NAMS_CHROMIUM_IMAGE: ghcr.io/nitutravels/nams-v6-chromium
+
+jobs:
+  deploy:
+    name: Recover and fully verify NAMS without modifying WAHA
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 110
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stop after verified success
+        id: guard
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [ -f status/nams-deployment-via-waha.json ] && [ "$(jq -r '.status // empty' status/nams-deployment-via-waha.json)" = success ]; then
+            echo 'skip=true' >> "$GITHUB_OUTPUT"
+            echo 'NAMS already has a recorded verified deployment; no Oracle operation will run.'
+          else
+            echo 'skip=false' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Validate controller and OCI credentials
+        if: steps.guard.outputs.skip != 'true'
+        shell: bash
+        env:
+          OCI_PRIVATE_KEY_PEM: ${{ secrets.OCI_PRIVATE_KEY }}
+          OCI_FINGERPRINT_VALUE: ${{ secrets.OCI_FINGERPRINT }}
+          OCI_USER_VALUE: ${{ secrets.OCI_USER_OCID }}
+          OCI_TENANCY_VALUE: ${{ secrets.OCI_TENANCY_OCID }}
+        run: |
+          set -Eeuo pipefail
+          bash -n nams-deploy/deploy-capacity-aware.sh
+          grep -q 'OCPUS=1' nams-deploy/deploy-capacity-aware.sh
+          grep -q 'FAULT-DOMAIN-3' nams-deploy/deploy-capacity-aware.sh
+          test -n "$OCI_PRIVATE_KEY_PEM"
+          test -n "$OCI_FINGERPRINT_VALUE"
+          [[ "$OCI_USER_VALUE" == ocid1.user.* ]]
+          [[ "$OCI_TENANCY_VALUE" == ocid1.tenancy.* ]]
+          grep -q 'BEGIN.*PRIVATE KEY' <<<"$OCI_PRIVATE_KEY_PEM"
+
+      - name: Configure OCI CLI
+        if: steps.guard.outputs.skip != 'true'
+        shell: bash
+        env:
+          OCI_PRIVATE_KEY_PEM: ${{ secrets.OCI_PRIVATE_KEY }}
+          OCI_FINGERPRINT_VALUE: ${{ secrets.OCI_FINGERPRINT }}
+          OCI_USER_VALUE: ${{ secrets.OCI_USER_OCID }}
+          OCI_TENANCY_VALUE: ${{ secrets.OCI_TENANCY_OCID }}
+          OCI_REGION_VALUE: ${{ vars.OCI_REGION || 'ap-mumbai-1' }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$HOME/.oci"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          value=os.environ['OCI_PRIVATE_KEY_PEM'].strip()
+          if len(value)>=2 and value[0]==value[-1] and value[0] in {'"',"'"}: value=value[1:-1]
+          if '\\n' in value and '\n' not in value: value=value.replace('\\r','').replace('\\n','\n')
+          Path.home().joinpath('.oci/key.pem').write_text(value.replace('\r','').strip()+'\n')
+          PY
+          chmod 600 "$HOME/.oci/key.pem"
+          cat >"$HOME/.oci/config" <<EOF
+          [DEFAULT]
+          user=$OCI_USER_VALUE
+          fingerprint=$(printf '%s' "$OCI_FINGERPRINT_VALUE" | tr -d '[:space:]')
+          tenancy=$OCI_TENANCY_VALUE
+          region=$OCI_REGION_VALUE
+          key_file=$HOME/.oci/key.pem
+          EOF
+          chmod 600 "$HOME/.oci/config"
+          pipx install --quiet oci-cli
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Validate OCI identity
+        if: steps.guard.outputs.skip != 'true'
+        env:
+          OCI_REGION: ${{ vars.OCI_REGION || 'ap-mumbai-1' }}
+          OCI_TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
+        run: oci iam region-subscription list --region "$OCI_REGION" --tenancy-id "$OCI_TENANCY_OCID" --all >/dev/null
+
+      - uses: docker/setup-buildx-action@v3
+        if: steps.guard.outputs.skip != 'true'
+
+      - name: Verify certified ARM64 images
+        if: steps.guard.outputs.skip != 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p deployment-evidence
+          for image in "$NAMS_APP_IMAGE:$NAMS_IMAGE_TAG" "$NAMS_CHROMIUM_IMAGE:$NAMS_IMAGE_TAG"; do
+            docker buildx imagetools inspect "$image" | tee "deployment-evidence/$(basename "$image" | tr ':' '-').manifest.txt"
+            grep -q linux/arm64 "deployment-evidence/$(basename "$image" | tr ':' '-').manifest.txt"
+          done
+
+      - name: Run capacity-aware Oracle recovery
+        if: steps.guard.outputs.skip != 'true'
+        id: deploy
+        continue-on-error: true
+        shell: bash
+        env:
+          OCI_REGION: ${{ vars.OCI_REGION || 'ap-mumbai-1' }}
+          OCI_TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
+          OCI_COMPARTMENT_OCID: ${{ vars.OCI_COMPARTMENT_OCID }}
+          OCI_COMPARTMENT_NAME: NituWAGateway
+          OCI_REFERENCE_INSTANCE: NituTravelsWAHA-20260719T184923Z
+          OCI_TARGET_INSTANCE: NAMS-Lightpanda-Agent
+          OCI_NSG_NAME: NAMS-Lightpanda-NSG
+          OCI_RESERVED_IP: ${{ vars.NAMS_RESERVED_IP || '161.118.166.225' }}
+          NAMS_DOMAIN: ${{ vars.NAMS_DOMAIN || 'seo.nitutravels.in' }}
+          NAMS_SOURCE_REF: ${{ env.NAMS_SOURCE_REF }}
+          NAMS_IMAGE_TAG: ${{ env.NAMS_IMAGE_TAG }}
+          NAMS_INSTALLER_REF: ${{ env.NAMS_INSTALLER_REF }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NAMS_RESULT_FILE: nams-deployment-result.json
+        run: |
+          set -Eeuo pipefail
+          chmod 700 nams-deploy/deploy-capacity-aware.sh
+          nams-deploy/deploy-capacity-aware.sh
+
+      - name: Collect, sanitize and record result
+        if: steps.guard.outputs.skip != 'true' && always()
+        shell: bash
+        env:
+          DEPLOY_OUTCOME: ${{ steps.deploy.outcome }}
+          DOMAIN: ${{ vars.NAMS_DOMAIN || 'seo.nitutravels.in' }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p status deployment-evidence
+          if [ -f nams-deployment-result.json ]; then
+            cp nams-deployment-result.json status/nams-deployment-via-waha.json
+          else
+            jq -n --arg outcome "$DEPLOY_OUTCOME" '{status:"failed",phase:"workflow",message:("Scheduled controller produced no result; outcome="+$outcome)}' >status/nams-deployment-via-waha.json
+          fi
+          resolved="$(getent ahostsv4 "$DOMAIN" 2>/dev/null | awk 'NR==1{print $1}' || true)"
+          public_ip="$(jq -r '.public_ip // empty' status/nams-deployment-via-waha.json)"
+          jq --arg run_id "$GITHUB_RUN_ID" --arg run_url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --arg workflow_outcome "$DEPLOY_OUTCOME" --arg dns_ip "$resolved" --arg expected_ip "$public_ip" '. + {run_id:$run_id,run_url:$run_url,workflow_outcome:$workflow_outcome,dns_ip:$dns_ip,dns_matches_deployment:($dns_ip!="" and $expected_ip!="" and $dns_ip==$expected_ip),recorded_at:(now|todate)}' status/nams-deployment-via-waha.json >status/nams-deployment-via-waha.tmp
+          mv status/nams-deployment-via-waha.tmp status/nams-deployment-via-waha.json
+          cp status/nams-deployment-via-waha.json deployment-evidence/result.json
+          cp nams-token-retrieval.txt deployment-evidence/ 2>/dev/null || true
+          cp nams-deployment-diagnostics.tgz deployment-evidence/ 2>/dev/null || true
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git pull --rebase origin main
+          git add status/nams-deployment-via-waha.json
+          if ! git diff --cached --quiet; then
+            git commit -m "Record guarded scheduled NAMS recovery for run $GITHUB_RUN_ID [skip ci]"
+            git push
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: steps.guard.outputs.skip != 'true' && always()
+        with:
+          name: nams-guarded-recovery
+          path: deployment-evidence/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Enforce verified completion
+        if: steps.guard.outputs.skip != 'true' && always()
+        env:
+          DEPLOY_OUTCOME: ${{ steps.deploy.outcome }}
+        run: |
+          status="$(jq -r '.status // "failed"' status/nams-deployment-via-waha.json)"
+          [ "$DEPLOY_OUTCOME" = success ] && [ "$status" = success ]
