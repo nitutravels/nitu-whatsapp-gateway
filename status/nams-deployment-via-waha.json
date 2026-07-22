@@ -1,12 +1,11 @@
 {
   "status": "failed",
-  "phase": "inventory",
-  "message": "An unfinished NAMS candidate exists and requires a safe replacement before recovery can continue.",
-  "exit_code": 31,
-  "run_id": "29963478423",
-  "run_url": "https://github.com/nitutravels/nitu-whatsapp-gateway/actions/runs/29963478423",
-  "workflow_outcome": "failure",
+  "phase": "workflow",
+  "message": "Recovery controller produced no result; outcome=skipped",
+  "run_id": "29963919389",
+  "run_url": "https://github.com/nitutravels/nitu-whatsapp-gateway/actions/runs/29963919389",
+  "workflow_outcome": "skipped",
   "dns_ip": "161.118.166.225",
   "dns_matches_deployment": false,
-  "recorded_at": "2026-07-22T22:38:12Z"
+  "recorded_at": "2026-07-22T22:45:07Z"
 }
