@@ -1,0 +1,58 @@
+name: NAMS recovery dispatcher
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/nams-recovery-dispatcher.yml'
+  schedule:
+    - cron: '7,37 * * * *'
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: nams-recovery-dispatcher
+  cancel-in-progress: true
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stop after verified success
+        id: guard
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          status='missing'
+          if [ -f status/nams-deployment-via-waha.json ]; then
+            status="$(jq -r '.status // "missing"' status/nams-deployment-via-waha.json)"
+          fi
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          if [ "$status" = success ]; then
+            echo 'NAMS is already verified; no deployment dispatch is needed.'
+          fi
+
+      - name: Dispatch only when no recovery run is active
+        if: steps.guard.outputs.status != 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TARGET_WORKFLOW: deploy-nams-using-waha-oci.yml
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          active="$(gh run list --repo "$REPO" --workflow "$TARGET_WORKFLOW" --limit 30 --json status,conclusion,databaseId,createdAt \
+            --jq '[.[] | select(.status=="queued" or .status=="in_progress" or .status=="waiting" or .status=="requested" or .status=="pending")] | length')"
+          if [ "$active" -gt 0 ]; then
+            echo "A NAMS recovery run is already active; no duplicate was dispatched."
+            exit 0
+          fi
+          gh workflow run "$TARGET_WORKFLOW" --repo "$REPO" --ref main
+          sleep 5
+          gh run list --repo "$REPO" --workflow "$TARGET_WORKFLOW" --limit 3 --json databaseId,status,conclusion,createdAt,url --jq '.'
