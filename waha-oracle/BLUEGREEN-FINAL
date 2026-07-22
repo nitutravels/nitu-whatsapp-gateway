@@ -1,0 +1,4 @@
+Final blue-green production cutover requested: 2026-07-19T15:25Z
+Candidate: Oracle VM.Standard.E2.1.Micro
+Transport: WAHA Core NOWEB
+Rollback: reserved IP returns to current VM if verification fails
