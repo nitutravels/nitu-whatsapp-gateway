@@ -1,4 +1,4 @@
-name: Secure NAMS production recovery v6
+name: Secure NAMS production recovery v7
 run-name: Secure NAMS recovery ${{ github.run_number }}
 
 on:
@@ -14,7 +14,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: nams-production-secure-v6
+  group: nams-production-secure-v7
   cancel-in-progress: false
 
 env:
@@ -108,7 +108,8 @@ jobs:
           cp nams-deploy/deploy-capacity-aware.sh "$RUNNER_TEMP/nams-controller-secure.sh"
           python3 - <<'PY'
           from pathlib import Path
-          p=Path(__import__('os').environ['RUNNER_TEMP'])/'nams-controller-secure.sh'
+          import os
+          p=Path(os.environ['RUNNER_TEMP'])/'nams-controller-secure.sh'
           s=p.read_text()
           old='''ACTIVE_NAMS="$(oci compute instance list --region "$REGION" --compartment-id "$COMPARTMENT_OCID" --display-name "$TARGET_NAME" --all --output json | jq -r '[.data[]|select(.["lifecycle-state"]!="TERMINATED")]|length')"
           [ "$ACTIVE_NAMS" -eq 0 ] || { log 'An active NAMS compute instance already exists; refusing duplicate launch'; exit 31; }'''
@@ -117,9 +118,8 @@ jobs:
             write_result failed "Unable to read NAMS instance inventory from OCI"
             exit 34
           fi
-          ACTIVE_NAMS="$(jq -r '([.data[]? | select(.["lifecycle-state"] != "TERMINATED")]|length) // 0' "$INVENTORY_JSON")"
-          [[ "$ACTIVE_NAMS" =~ ^[0-9]+$ ]] || { write_result failed "OCI returned an invalid NAMS inventory count"; exit 35; }
-          if [ "$ACTIVE_NAMS" -ne 0 ]; then
+          jq -e '.data | type == "array"' "$INVENTORY_JSON" >/dev/null || { write_result failed "OCI returned malformed NAMS inventory JSON"; exit 35; }
+          if ! jq -e '[.data[]? | select(.["lifecycle-state"] != "TERMINATED")] | length == 0' "$INVENTORY_JSON" >/dev/null; then
             NEW_ID="$(jq -r '[.data[]? | select(.["lifecycle-state"] != "TERMINATED") | .id][0] // empty' "$INVENTORY_JSON")"
             write_result failed "An active NAMS compute instance already exists; duplicate launch was safely refused"
             exit 31
@@ -212,7 +212,7 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add status/nams-deployment-via-waha.json
           if ! git diff --cached --quiet; then
-            git commit -m "Record secure NAMS recovery v6 run $GITHUB_RUN_ID [skip ci]"
+            git commit -m "Record secure NAMS recovery v7 run $GITHUB_RUN_ID [skip ci]"
             git push
           fi
 
@@ -220,7 +220,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: nams-secure-recovery-v6
+          name: nams-secure-recovery-v7
           path: deployment-evidence/
           if-no-files-found: warn
           retention-days: 14
