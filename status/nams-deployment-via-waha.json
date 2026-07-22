@@ -1,11 +1,19 @@
 {
   "status": "failed",
   "phase": "inventory",
-  "message": "The previous recovery stopped because the active-instance inventory count was empty. Raw shell traces and transient credentials have been removed. A targeted inventory fix is being deployed.",
-  "public_ip": "161.118.166.225",
+  "instance_id": "",
+  "public_ip": "",
   "domain": "seo.nitutravels.in",
+  "image_tag": "c74d8660d516e9330a9ad4f24742b10c43c487c4-cdp1",
+  "source_ref": "c74d8660d516e9330a9ad4f24742b10c43c487c4",
+  "message": "OCI returned an invalid NAMS inventory count",
+  "shape": "VM.Standard.A1.Flex",
+  "ocpus": 1,
+  "memory_gb": 8,
+  "run_id": "29947863360",
+  "run_url": "https://github.com/nitutravels/nitu-whatsapp-gateway/actions/runs/29947863360",
+  "workflow_outcome": "failure",
   "dns_ip": "161.118.166.225",
   "dns_matches_deployment": false,
-  "last_failed_run_id": "29944088083",
-  "security_note": "The exposed GitHub job token was short-lived and has expired; future status artifacts exclude raw environment traces."
+  "recorded_at": "2026-07-22T18:43:46Z"
 }
