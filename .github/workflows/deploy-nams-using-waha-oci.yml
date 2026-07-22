@@ -15,11 +15,11 @@ permissions:
   actions: read
 
 concurrency:
-  group: nams-production-v4-isolated
+  group: nams-production-v5-observable
   cancel-in-progress: false
 
 env:
-  RECOVERY_GENERATION: capacity-aware-v4-isolated
+  RECOVERY_GENERATION: capacity-aware-v5-observable
   NAMS_SOURCE_REF: c74d8660d516e9330a9ad4f24742b10c43c487c4
   NAMS_IMAGE_TAG: c74d8660d516e9330a9ad4f24742b10c43c487c4-cdp1
   NAMS_INSTALLER_REF: 1bf9e499c3d501cd9740ce5ac7af3bfd48c39f2c
@@ -144,11 +144,22 @@ jobs:
           NAMS_INSTALLER_REF: ${{ env.NAMS_INSTALLER_REF }}
           GHCR_USER: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NAMS_RESULT_FILE: nams-deployment-result.json
+          NAMS_RESULT_FILE: ${{ github.workspace }}/nams-deployment-result.json
         run: |
-          set -Eeuo pipefail
+          set -uo pipefail
+          mkdir -p deployment-evidence
           chmod 700 nams-deploy/deploy-capacity-aware.sh
-          nams-deploy/deploy-capacity-aware.sh
+          set +e
+          bash -x nams-deploy/deploy-capacity-aware.sh > >(tee deployment-evidence/controller.log) 2>&1
+          rc=$?
+          set -e
+          if [ ! -s "$NAMS_RESULT_FILE" ]; then
+            tail -n 300 deployment-evidence/controller.log >deployment-evidence/controller-tail.log || true
+            jq -n --argjson rc "$rc" --arg tail "$(tail -c 6000 deployment-evidence/controller.log 2>/dev/null || true)" \
+              '{status:"failed",phase:"controller",message:"Controller returned without producing its required result",exit_code:$rc,controller_tail:$tail}' >"$NAMS_RESULT_FILE"
+            [ "$rc" -ne 0 ] || rc=90
+          fi
+          exit "$rc"
 
       - name: Collect sanitized result and DNS evidence
         if: always()
@@ -159,7 +170,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           mkdir -p status deployment-evidence
-          if [ -f nams-deployment-result.json ]; then
+          if [ -s nams-deployment-result.json ]; then
             cp nams-deployment-result.json status/nams-deployment-via-waha.json
           else
             jq -n --arg outcome "$DEPLOY_OUTCOME" '{status:"failed",phase:"workflow",message:("Recovery controller produced no result; outcome="+$outcome)}' >status/nams-deployment-via-waha.json
@@ -184,12 +195,16 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+          cp status/nams-deployment-via-waha.json /tmp/nams-deployment-via-waha.json
+          git reset --hard HEAD
+          git pull --ff-only origin main
+          mkdir -p status
+          cp /tmp/nams-deployment-via-waha.json status/nams-deployment-via-waha.json
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git pull --rebase origin main
           git add status/nams-deployment-via-waha.json
           if ! git diff --cached --quiet; then
-            git commit -m "Record capacity-aware NAMS recovery for run $GITHUB_RUN_ID [skip ci]"
+            git commit -m "Record observable NAMS recovery for run $GITHUB_RUN_ID [skip ci]"
             git push
           fi
 
@@ -211,7 +226,7 @@ jobs:
           set -Eeuo pipefail
           status="$(jq -r '.status // "failed"' status/nams-deployment-via-waha.json)"
           if [ "$DEPLOY_OUTCOME" != success ] || [ "$status" != success ]; then
-            echo 'NAMS recovery did not complete. Exact diagnostics were preserved; the same failed placement was not repeated.' >&2
+            echo 'NAMS recovery did not complete. Exact controller output and diagnostics were preserved.' >&2
             exit 1
           fi
           echo 'NAMS deployment completed and was fully verified.'
