@@ -42,9 +42,10 @@ jobs:
         run: |
           set -Eeuo pipefail
           bash -n nams-deploy/deploy-capacity-aware.sh
-          grep -q "OCPUS=1" nams-deploy/deploy-capacity-aware.sh
-          grep -q "FAULT-DOMAIN-3" nams-deploy/deploy-capacity-aware.sh
-          grep -q "OCI_REFERENCE_INSTANCE" nams-deploy/deploy-capacity-aware.sh
+          grep -q 'BASE_CONTROLLER_REF="128feab466e42c9d61b279c2b707ae5053b4721d"' nams-deploy/deploy-capacity-aware.sh
+          grep -q 'preserve-boot-volume true' nams-deploy/deploy-capacity-aware.sh
+          grep -q 'FAULT-DOMAIN-3' nams-deploy/deploy-capacity-aware.sh
+          grep -q 'exec bash "$WORK/controller.sh"' nams-deploy/deploy-capacity-aware.sh
 
       - name: Prove the WAHA repository has usable OCI production credentials
         shell: bash
