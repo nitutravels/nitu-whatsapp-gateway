@@ -15,11 +15,11 @@ permissions:
   actions: read
 
 concurrency:
-  group: nams-production-via-waha-repository
+  group: nams-production-v4-isolated
   cancel-in-progress: false
 
 env:
-  RECOVERY_GENERATION: capacity-aware-v3-dispatch
+  RECOVERY_GENERATION: capacity-aware-v4-isolated
   NAMS_SOURCE_REF: c74d8660d516e9330a9ad4f24742b10c43c487c4
   NAMS_IMAGE_TAG: c74d8660d516e9330a9ad4f24742b10c43c487c4-cdp1
   NAMS_INSTALLER_REF: 1bf9e499c3d501cd9740ce5ac7af3bfd48c39f2c
