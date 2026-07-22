@@ -1,0 +1,126 @@
+{
+  "recorded_at": "2026-07-22T14:42:58Z",
+  "runs": [
+    {
+      "conclusion": "failure",
+      "createdAt": "2026-07-22T12:39:32Z",
+      "databaseId": 29920520620,
+      "displayTitle": "Capacity-aware NAMS Oracle recovery 11",
+      "event": "workflow_dispatch",
+      "headSha": "f963d24c1d56857dc4b16265fe831cea99d83f27",
+      "status": "completed",
+      "updatedAt": "2026-07-22T12:40:41Z",
+      "url": "https://github.com/nitutravels/nitu-whatsapp-gateway/actions/runs/29920520620"
+    },
+    {
+      "conclusion": "failure",
+      "createdAt": "2026-07-22T11:45:31Z",
+      "databaseId": 29916927445,
+      "displayTitle": "Capacity-aware NAMS Oracle recovery 10",
+      "event": "push",
+      "headSha": "4dd4127d21e400d07ad0ceb9b808f65be5df5eba",
+      "status": "completed",
+      "updatedAt": "2026-07-22T11:46:35Z",
+      "url": "https://github.com/nitutravels/nitu-whatsapp-gateway/actions/runs/29916927445"
+    },
+    {
+      "conclusion": "failure",
+      "createdAt": "2026-07-22T08:41:29Z",
+      "databaseId": 29904974714,
+      "displayTitle": "Capacity-aware NAMS Oracle recovery 9",
+      "event": "push",
+      "headSha": "22c15887344f48e8e04b54f7e423c81dddf934e1",
+      "status": "completed",
+      "updatedAt": "2026-07-22T08:42:35Z",
+      "url": "https://github.com/nitutravels/nitu-whatsapp-gateway/actions/runs/29904974714"
+    },
+    {
+      "conclusion": "cancelled",
+      "createdAt": "2026-07-22T06:44:45Z",
+      "databaseId": 29897748724,
+      "displayTitle": "Capacity-aware NAMS Oracle recovery 8",
+      "event": "push",
+      "headSha": "bfa7862d272185abfee0c8f7be020383b22d52ab",
+      "status": "completed",
+      "updatedAt": "2026-07-22T06:44:47Z",
+      "url": "https://github.com/nitutravels/nitu-whatsapp-gateway/actions/runs/29897748724"
+    },
+    {
+      "conclusion": "failure",
+      "createdAt": "2026-07-21T22:37:11Z",
+      "databaseId": 29874394646,
+      "displayTitle": "Capacity-aware NAMS Oracle recovery 7",
+      "event": "push",
+      "headSha": "d9c5e3298f8963b70969dd8590ce9e7387cda928",
+      "status": "completed",
+      "updatedAt": "2026-07-21T22:38:26Z",
+      "url": "https://github.com/nitutravels/nitu-whatsapp-gateway/actions/runs/29874394646"
+    },
+    {
+      "conclusion": "failure",
+      "createdAt": "2026-07-21T16:24:38Z",
+      "databaseId": 29848455162,
+      "displayTitle": "Capacity-aware NAMS Oracle recovery 6",
+      "event": "push",
+      "headSha": "8fd62cbe9349fcb946a609f2a2db30f832669e39",
+      "status": "completed",
+      "updatedAt": "2026-07-21T16:38:52Z",
+      "url": "https://github.com/nitutravels/nitu-whatsapp-gateway/actions/runs/29848455162"
+    },
+    {
+      "conclusion": "failure",
+      "createdAt": "2026-07-21T16:22:59Z",
+      "databaseId": 29848330355,
+      "displayTitle": "Capacity-aware NAMS Oracle recovery 5",
+      "event": "push",
+      "headSha": "89fe9e7fc70ff4f9f7977fc81d09905c94269e9c",
+      "status": "completed",
+      "updatedAt": "2026-07-21T16:30:54Z",
+      "url": "https://github.com/nitutravels/nitu-whatsapp-gateway/actions/runs/29848330355"
+    },
+    {
+      "conclusion": "failure",
+      "createdAt": "2026-07-21T14:38:04Z",
+      "databaseId": 29840028995,
+      "displayTitle": "Capacity-aware NAMS Oracle recovery 4",
+      "event": "push",
+      "headSha": "5b3012e8875ac432c995729f263bd305523998b6",
+      "status": "completed",
+      "updatedAt": "2026-07-21T14:46:08Z",
+      "url": "https://github.com/nitutravels/nitu-whatsapp-gateway/actions/runs/29840028995"
+    },
+    {
+      "conclusion": "failure",
+      "createdAt": "2026-07-21T12:37:25Z",
+      "databaseId": 29830862321,
+      "displayTitle": "Capacity-aware NAMS Oracle recovery 3",
+      "event": "push",
+      "headSha": "5f4771dbdac43b864e46a97a5c9de499d1ca2c47",
+      "status": "completed",
+      "updatedAt": "2026-07-21T12:45:33Z",
+      "url": "https://github.com/nitutravels/nitu-whatsapp-gateway/actions/runs/29830862321"
+    },
+    {
+      "conclusion": "failure",
+      "createdAt": "2026-07-21T10:37:26Z",
+      "databaseId": 29822929811,
+      "displayTitle": "Capacity-aware NAMS Oracle recovery 2",
+      "event": "push",
+      "headSha": "bf946667cf7d77932f26511a5ccb54fadac87906",
+      "status": "completed",
+      "updatedAt": "2026-07-21T10:45:32Z",
+      "url": "https://github.com/nitutravels/nitu-whatsapp-gateway/actions/runs/29822929811"
+    },
+    {
+      "conclusion": "failure",
+      "createdAt": "2026-07-21T10:03:38Z",
+      "databaseId": 29820744209,
+      "displayTitle": "NAMS Oracle deployment via WAHA repository 1",
+      "event": "push",
+      "headSha": "9460cff0c94fad012007af6aa63d4e4add61ca76",
+      "status": "completed",
+      "updatedAt": "2026-07-21T10:11:24Z",
+      "url": "https://github.com/nitutravels/nitu-whatsapp-gateway/actions/runs/29820744209"
+    }
+  ]
+}
