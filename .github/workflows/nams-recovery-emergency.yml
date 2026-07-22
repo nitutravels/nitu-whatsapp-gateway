@@ -4,6 +4,10 @@ run-name: Emergency NAMS recovery ${{ github.run_number }}
 on:
   push:
     branches: [main]
+    paths:
+      - '.github/workflows/nams-recovery-emergency.yml'
+      - 'nams-deploy/deploy-capacity-aware.sh'
+      - 'nams-deploy/TRIGGER-EMERGENCY-RECOVERY'
   workflow_dispatch:
 
 permissions:
@@ -13,7 +17,7 @@ permissions:
 
 concurrency:
   group: nams-production-via-waha-repository
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 env:
   NAMS_SOURCE_REF: c74d8660d516e9330a9ad4f24742b10c43c487c4
