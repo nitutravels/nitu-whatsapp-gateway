@@ -1,0 +1,240 @@
+name: Secure NAMS production recovery v6
+run-name: Secure NAMS recovery ${{ github.run_number }}
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/nams-recovery-secure-v6.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: read
+  actions: read
+
+concurrency:
+  group: nams-production-secure-v6
+  cancel-in-progress: false
+
+env:
+  NAMS_SOURCE_REF: c74d8660d516e9330a9ad4f24742b10c43c487c4
+  NAMS_IMAGE_TAG: c74d8660d516e9330a9ad4f24742b10c43c487c4-cdp1
+  NAMS_INSTALLER_REF: 1bf9e499c3d501cd9740ce5ac7af3bfd48c39f2c
+  NAMS_APP_IMAGE: ghcr.io/nitutravels/nams-v6-app
+  NAMS_CHROMIUM_IMAGE: ghcr.io/nitutravels/nams-v6-chromium
+
+jobs:
+  recover:
+    name: Recover NAMS without modifying WAHA
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 110
+
+    steps:
+      - name: Checkout operations repository
+        uses: actions/checkout@v4
+
+      - name: Validate required production credentials
+        shell: bash
+        env:
+          OCI_PRIVATE_KEY_PEM: ${{ secrets.OCI_PRIVATE_KEY }}
+          OCI_FINGERPRINT_VALUE: ${{ secrets.OCI_FINGERPRINT }}
+          OCI_USER_VALUE: ${{ secrets.OCI_USER_OCID }}
+          OCI_TENANCY_VALUE: ${{ secrets.OCI_TENANCY_OCID }}
+        run: |
+          set -Eeuo pipefail
+          test -n "$OCI_PRIVATE_KEY_PEM"
+          test -n "$OCI_FINGERPRINT_VALUE"
+          [[ "$OCI_USER_VALUE" == ocid1.user.* ]]
+          [[ "$OCI_TENANCY_VALUE" == ocid1.tenancy.* ]]
+          grep -q 'BEGIN.*PRIVATE KEY' <<<"$OCI_PRIVATE_KEY_PEM"
+
+      - name: Configure OCI CLI
+        shell: bash
+        env:
+          OCI_PRIVATE_KEY_PEM: ${{ secrets.OCI_PRIVATE_KEY }}
+          OCI_FINGERPRINT_VALUE: ${{ secrets.OCI_FINGERPRINT }}
+          OCI_USER_VALUE: ${{ secrets.OCI_USER_OCID }}
+          OCI_TENANCY_VALUE: ${{ secrets.OCI_TENANCY_OCID }}
+          OCI_REGION_VALUE: ${{ vars.OCI_REGION || 'ap-mumbai-1' }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$HOME/.oci"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          value=os.environ['OCI_PRIVATE_KEY_PEM'].strip()
+          if len(value)>=2 and value[0]==value[-1] and value[0] in {'"',"'"}:
+              value=value[1:-1]
+          if '\\n' in value and '\n' not in value:
+              value=value.replace('\\r','').replace('\\n','\n')
+          Path.home().joinpath('.oci/key.pem').write_text(value.replace('\r','').strip()+'\n')
+          PY
+          chmod 600 "$HOME/.oci/key.pem"
+          cat >"$HOME/.oci/config" <<EOF
+          [DEFAULT]
+          user=$OCI_USER_VALUE
+          fingerprint=$(printf '%s' "$OCI_FINGERPRINT_VALUE" | tr -d '[:space:]')
+          tenancy=$OCI_TENANCY_VALUE
+          region=$OCI_REGION_VALUE
+          key_file=$HOME/.oci/key.pem
+          EOF
+          chmod 600 "$HOME/.oci/config"
+          pipx install --quiet oci-cli
+          echo "$HOME/.local/bin" >>"$GITHUB_PATH"
+
+      - name: Verify OCI identity and certified ARM64 images
+        shell: bash
+        env:
+          OCI_REGION: ${{ vars.OCI_REGION || 'ap-mumbai-1' }}
+          OCI_TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
+        run: |
+          set -Eeuo pipefail
+          oci iam region-subscription list --region "$OCI_REGION" --tenancy-id "$OCI_TENANCY_OCID" --all >/dev/null
+          docker buildx create --use >/dev/null 2>&1 || true
+          mkdir -p deployment-evidence
+          for image in "$NAMS_APP_IMAGE:$NAMS_IMAGE_TAG" "$NAMS_CHROMIUM_IMAGE:$NAMS_IMAGE_TAG"; do
+            file="deployment-evidence/$(basename "$image" | tr ':' '-').manifest.txt"
+            docker buildx imagetools inspect "$image" >"$file"
+            grep -q 'linux/arm64' "$file"
+          done
+
+      - name: Prepare deterministic secure controller
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash -n nams-deploy/deploy-capacity-aware.sh
+          cp nams-deploy/deploy-capacity-aware.sh "$RUNNER_TEMP/nams-controller-secure.sh"
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path(__import__('os').environ['RUNNER_TEMP'])/'nams-controller-secure.sh'
+          s=p.read_text()
+          old='''ACTIVE_NAMS="$(oci compute instance list --region "$REGION" --compartment-id "$COMPARTMENT_OCID" --display-name "$TARGET_NAME" --all --output json | jq -r '[.data[]|select(.["lifecycle-state"]!="TERMINATED")]|length')"
+          [ "$ACTIVE_NAMS" -eq 0 ] || { log 'An active NAMS compute instance already exists; refusing duplicate launch'; exit 31; }'''
+          new='''INVENTORY_JSON="$WORK/nams-inventory.json"
+          if ! oci compute instance list --region "$REGION" --compartment-id "$COMPARTMENT_OCID" --display-name "$TARGET_NAME" --all --output json >"$INVENTORY_JSON"; then
+            write_result failed "Unable to read NAMS instance inventory from OCI"
+            exit 34
+          fi
+          ACTIVE_NAMS="$(jq -r '([.data[]? | select(.["lifecycle-state"] != "TERMINATED")]|length) // 0' "$INVENTORY_JSON")"
+          [[ "$ACTIVE_NAMS" =~ ^[0-9]+$ ]] || { write_result failed "OCI returned an invalid NAMS inventory count"; exit 35; }
+          if [ "$ACTIVE_NAMS" -ne 0 ]; then
+            NEW_ID="$(jq -r '[.data[]? | select(.["lifecycle-state"] != "TERMINATED") | .id][0] // empty' "$INVENTORY_JSON")"
+            write_result failed "An active NAMS compute instance already exists; duplicate launch was safely refused"
+            exit 31
+          fi'''
+          if old not in s:
+              raise SystemExit('Expected inventory block was not found; refusing an unverified patch')
+          p.write_text(s.replace(old,new,1))
+          PY
+          chmod 700 "$RUNNER_TEMP/nams-controller-secure.sh"
+          bash -n "$RUNNER_TEMP/nams-controller-secure.sh"
+
+      - name: Run targeted capacity-aware recovery
+        id: deploy
+        continue-on-error: true
+        shell: bash
+        env:
+          OCI_REGION: ${{ vars.OCI_REGION || 'ap-mumbai-1' }}
+          OCI_TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
+          OCI_COMPARTMENT_OCID: ${{ vars.OCI_COMPARTMENT_OCID }}
+          OCI_COMPARTMENT_NAME: NituWAGateway
+          OCI_REFERENCE_INSTANCE: NituTravelsWAHA-20260719T184923Z
+          OCI_TARGET_INSTANCE: NAMS-Lightpanda-Agent
+          OCI_NSG_NAME: NAMS-Lightpanda-NSG
+          OCI_RESERVED_IP: ${{ vars.NAMS_RESERVED_IP || '161.118.166.225' }}
+          NAMS_DOMAIN: ${{ vars.NAMS_DOMAIN || 'seo.nitutravels.in' }}
+          NAMS_SOURCE_REF: ${{ env.NAMS_SOURCE_REF }}
+          NAMS_IMAGE_TAG: ${{ env.NAMS_IMAGE_TAG }}
+          NAMS_INSTALLER_REF: ${{ env.NAMS_INSTALLER_REF }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NAMS_RESULT_FILE: ${{ github.workspace }}/nams-deployment-result.json
+        run: |
+          set -uo pipefail
+          mkdir -p deployment-evidence
+          set +e
+          bash "$RUNNER_TEMP/nams-controller-secure.sh" >deployment-evidence/controller.log 2>&1
+          rc=$?
+          set -e
+          sed -E -i \
+            -e 's/gh[opsu]_[A-Za-z0-9_]+/[REDACTED_GITHUB_TOKEN]/g' \
+            -e 's/(TOKEN=)[0-9a-fA-F]{24,}/\1[REDACTED]/g' \
+            -e 's/(GHCR_TOKEN=).*/\1[REDACTED]/g' \
+            deployment-evidence/controller.log
+          if [ ! -s "$NAMS_RESULT_FILE" ]; then
+            jq -n --argjson rc "$rc" '{status:"failed",phase:"controller",message:"Controller exited without a result; sanitized diagnostics are available",exit_code:$rc}' >"$NAMS_RESULT_FILE"
+            [ "$rc" -ne 0 ] || rc=90
+          fi
+          exit "$rc"
+
+      - name: Publish sanitized result and DNS evidence
+        if: always()
+        shell: bash
+        env:
+          DEPLOY_OUTCOME: ${{ steps.deploy.outcome }}
+          DOMAIN: ${{ vars.NAMS_DOMAIN || 'seo.nitutravels.in' }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p status deployment-evidence
+          if [ -s nams-deployment-result.json ]; then
+            jq 'del(.token,.controller_tail,.ghcr_token,.bootstrap_token)' nams-deployment-result.json >status/nams-deployment-via-waha.json
+          else
+            jq -n --arg outcome "$DEPLOY_OUTCOME" '{status:"failed",phase:"workflow",message:("Recovery produced no result; outcome="+$outcome)}' >status/nams-deployment-via-waha.json
+          fi
+          resolved="$(getent ahostsv4 "$DOMAIN" 2>/dev/null | awk 'NR==1{print $1}' || true)"
+          public_ip="$(jq -r '.public_ip // empty' status/nams-deployment-via-waha.json)"
+          jq --arg run_id "$GITHUB_RUN_ID" \
+             --arg run_url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+             --arg workflow_outcome "$DEPLOY_OUTCOME" \
+             --arg dns_ip "$resolved" \
+             --arg expected_ip "$public_ip" \
+             '. + {run_id:$run_id,run_url:$run_url,workflow_outcome:$workflow_outcome,dns_ip:$dns_ip,dns_matches_deployment:($dns_ip!="" and $expected_ip!="" and $dns_ip==$expected_ip),recorded_at:(now|todate)}' \
+             status/nams-deployment-via-waha.json >status/nams-deployment-via-waha.tmp
+          mv status/nams-deployment-via-waha.tmp status/nams-deployment-via-waha.json
+          cp status/nams-deployment-via-waha.json deployment-evidence/result.json
+          cp nams-token-retrieval.txt deployment-evidence/ 2>/dev/null || true
+          cp nams-deployment-diagnostics.tgz deployment-evidence/ 2>/dev/null || true
+          cat status/nams-deployment-via-waha.json
+
+      - name: Record sanitized deployment result
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cp status/nams-deployment-via-waha.json /tmp/nams-deployment-via-waha.json
+          git reset --hard HEAD
+          git pull --ff-only origin main
+          mkdir -p status
+          cp /tmp/nams-deployment-via-waha.json status/nams-deployment-via-waha.json
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add status/nams-deployment-via-waha.json
+          if ! git diff --cached --quiet; then
+            git commit -m "Record secure NAMS recovery v6 run $GITHUB_RUN_ID [skip ci]"
+            git push
+          fi
+
+      - name: Upload sanitized recovery evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nams-secure-recovery-v6
+          path: deployment-evidence/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Enforce verified completion
+        if: always()
+        shell: bash
+        env:
+          DEPLOY_OUTCOME: ${{ steps.deploy.outcome }}
+        run: |
+          set -Eeuo pipefail
+          status="$(jq -r '.status // "failed"' status/nams-deployment-via-waha.json)"
+          if [ "$DEPLOY_OUTCOME" != success ] || [ "$status" != success ]; then
+            echo 'NAMS recovery did not complete; sanitized diagnostics were preserved.' >&2
+            exit 1
+          fi
+          echo 'NAMS deployment completed and was fully verified.'
