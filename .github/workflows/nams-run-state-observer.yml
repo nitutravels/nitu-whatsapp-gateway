@@ -1,0 +1,57 @@
+name: NAMS workflow state observer
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/nams-run-state-observer.yml'
+  schedule:
+    - cron: '12,42 * * * *'
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: nams-run-state-observer
+  cancel-in-progress: true
+
+jobs:
+  observe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Record exact NAMS recovery run state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TARGET_WORKFLOW: deploy-nams-using-waha-oci.yml
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p status
+          gh run list --repo "$REPO" --workflow "$TARGET_WORKFLOW" --limit 50 \
+            --json databaseId,status,conclusion,createdAt,updatedAt,event,headSha,displayTitle,url \
+            > status/nams-recovery-runs-latest.json
+          jq '{recorded_at:(now|todate), runs:.}' status/nams-recovery-runs-latest.json \
+            > status/nams-recovery-runs-latest.tmp
+          mv status/nams-recovery-runs-latest.tmp status/nams-recovery-runs-latest.json
+          cat status/nams-recovery-runs-latest.json
+
+      - name: Persist observer evidence without triggering deployment
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git pull --rebase origin main
+          git add status/nams-recovery-runs-latest.json
+          if ! git diff --cached --quiet; then
+            git commit -m "Record exact NAMS recovery workflow state [skip ci]"
+            git push
+          fi
