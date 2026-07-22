@@ -1,0 +1,83 @@
+name: Capture exact NAMS recovery artifact
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/nams-artifact-observer.yml'
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Locate newest completed NAMS recovery run
+        id: run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          run_json="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow 'deploy-nams-using-waha-oci.yml' --limit 20 --json databaseId,status,conclusion,createdAt,url,headSha | jq -c '[.[] | select(.status=="completed")][0]')"
+          test "$run_json" != null
+          run_id="$(jq -r .databaseId <<<"$run_json")"
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$run_json" > /tmp/run.json
+
+      - name: Download exact deployment artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ steps.run.outputs.run_id }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf /tmp/nams-artifact
+          mkdir -p /tmp/nams-artifact
+          gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --name nams-deployment-via-waha --dir /tmp/nams-artifact
+          find /tmp/nams-artifact -maxdepth 4 -type f -print
+
+      - name: Build sanitized exact-state record
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p status
+          result="$(find /tmp/nams-artifact -type f \( -name result.json -o -name nams-deployment-result.json -o -name nams-deployment-via-waha.json \) | head -1)"
+          if [ -n "$result" ]; then
+            jq 'del(.token,.admin_token,.bootstrap_token)' "$result" > /tmp/result.json
+          else
+            jq -n '{status:"failed",phase:"artifact",message:"Deployment artifact contained no result JSON"}' > /tmp/result.json
+          fi
+          launch="$(find /tmp/nams-artifact -type f -name 'launch-errors.txt' | head -1)"
+          if [ -n "$launch" ]; then
+            tail -c 12000 "$launch" > /tmp/launch-errors.txt
+          else
+            : > /tmp/launch-errors.txt
+          fi
+          jq -n \
+            --slurpfile run /tmp/run.json \
+            --slurpfile result /tmp/result.json \
+            --rawfile launch_errors /tmp/launch-errors.txt \
+            '{recorded_at:(now|todate),run:$run[0],result:$result[0],launch_errors:$launch_errors}' \
+            > status/nams-recovery-exact-latest.json
+          cat status/nams-recovery-exact-latest.json
+
+      - name: Commit exact recovery state
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git pull --rebase origin main
+          git add status/nams-recovery-exact-latest.json
+          if ! git diff --cached --quiet; then
+            git commit -m 'Record exact NAMS recovery artifact [skip ci]'
+            git push
+          fi
