@@ -1,12 +1,13 @@
 {
   "status": "failed",
   "phase": "controller",
-  "message": "Recovery controller produced no result",
-  "exit_code": 33,
-  "run_id": "29975025108",
-  "run_url": "https://github.com/nitutravels/nitu-whatsapp-gateway/actions/runs/29975025108",
+  "message": "Controller returned without producing its required result",
+  "exit_code": 32,
+  "controller_tail": "+ set +x\n[2026-07-23T03:38:21Z] Validating OCI identity and immutable image manifests\n[2026-07-23T03:38:23Z] Resolving the WAHA network placement without modifying WAHA\n[2026-07-23T03:38:45Z] Launching a capacity-aware A1 replacement at 1 OCPU / 8 GB\n[2026-07-23T03:40:26Z] Placement auto remains unavailable after classified handling; trying the next distinct fault-domain placement\n[2026-07-23T03:42:05Z] OCI rate limited profile FAULT-DOMAIN-1; cooling down for 180 seconds before one controlled retry\n[2026-07-23T03:46:46Z] Placement FAULT-DOMAIN-1 remains unavailable after classified handling; trying the next distinct fault-domain placement\n[2026-07-23T03:48:24Z] Non-capacity launch failure encountered; stopping targeted alternatives\nRequestException:\n{\n    \"client_version\": \"Oracle-PythonCLI/3.89.3\",\n    \"logging_tips\": \"Please run the OCI CLI command using --debug flag to find more debug information.\",\n    \"message\": \"The connection to endpoint timed out.\",\n    \"request_endpoint\": null,\n    \"target_service\": \"CLI\",\n    \"timestamp\": \"2026-07-23T03:48:24.546872\",\n    \"troubleshooting_tips\": \" See [https://docs.oracle.com/iaas/Content/API/SDKDocs/clitroubleshooting.htm] for more information about resolving this error. If you are unable to resolve this issue, run this CLI command with --debug option and contact Oracle support and provide them the full error message.\"\n}",
+  "run_id": "29977472144",
+  "run_url": "https://github.com/nitutravels/nitu-whatsapp-gateway/actions/runs/29977472144",
   "workflow_outcome": "failure",
   "dns_ip": "161.118.166.225",
   "dns_matches_deployment": false,
-  "recorded_at": "2026-07-23T03:07:35Z"
+  "recorded_at": "2026-07-23T03:48:24Z"
 }
