@@ -1,0 +1,190 @@
+name: Repair and complete active NAMS candidate
+run-name: NAMS in-place completion ${{ github.run_number }}
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/nams-repair-active.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: read
+
+concurrency:
+  group: nams-active-inplace-repair
+  cancel-in-progress: false
+
+env:
+  OCI_REGION: ap-mumbai-1
+  TARGET_NAME: NAMS-Lightpanda-Agent
+  REPAIR_REF: 84c0a64545f345fa6c58949db0c283e8e9f39b76
+  SOURCE_REF: c74d8660d516e9330a9ad4f24742b10c43c487c4
+  IMAGE_TAG: c74d8660d516e9330a9ad4f24742b10c43c487c4-cdp1
+  DOMAIN: seo.nitutravels.in
+  RESERVED_IP: 161.118.166.225
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure OCI CLI
+        env:
+          OCI_PRIVATE_KEY_PEM: ${{ secrets.OCI_PRIVATE_KEY }}
+          OCI_FINGERPRINT_VALUE: ${{ secrets.OCI_FINGERPRINT }}
+          OCI_USER_VALUE: ${{ secrets.OCI_USER_OCID }}
+          OCI_TENANCY_VALUE: ${{ secrets.OCI_TENANCY_OCID }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$HOME/.oci"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          value=os.environ['OCI_PRIVATE_KEY_PEM'].strip()
+          if len(value)>=2 and value[0]==value[-1] and value[0] in {'"',"'"}: value=value[1:-1]
+          if '\\n' in value and '\n' not in value: value=value.replace('\\r','').replace('\\n','\n')
+          Path.home().joinpath('.oci/key.pem').write_text(value.replace('\r','').strip()+'\n')
+          PY
+          chmod 600 "$HOME/.oci/key.pem"
+          cat >"$HOME/.oci/config" <<EOF
+          [DEFAULT]
+          user=$OCI_USER_VALUE
+          fingerprint=$(printf '%s' "$OCI_FINGERPRINT_VALUE" | tr -d '[:space:]')
+          tenancy=$OCI_TENANCY_VALUE
+          region=$OCI_REGION
+          key_file=$HOME/.oci/key.pem
+          EOF
+          pipx install --quiet oci-cli
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Locate active candidate and execute targeted repair
+        id: repair
+        continue-on-error: true
+        env:
+          TENANCY: ${{ secrets.OCI_TENANCY_OCID }}
+          CONFIGURED_COMPARTMENT: ${{ vars.OCI_COMPARTMENT_OCID }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p diagnostics status
+          compartment="$CONFIGURED_COMPARTMENT"
+          if [[ "$compartment" != ocid1.compartment.* ]]; then
+            compartment="$(oci iam compartment list --region "$OCI_REGION" --compartment-id "$TENANCY" --compartment-id-in-subtree true --access-level ACCESSIBLE --all --output json | jq -r '[.data[]|select(.name=="NituWAGateway" and .["lifecycle-state"]=="ACTIVE")|.id][0]//empty')"
+          fi
+          [[ "$compartment" == ocid1.compartment.* ]]
+          echo "compartment=$compartment" >> "$GITHUB_OUTPUT"
+
+          inventory="$(oci compute instance list --region "$OCI_REGION" --compartment-id "$compartment" --display-name "$TARGET_NAME" --all --output json)"
+          id="$(jq -r '[.data[]|select(.["lifecycle-state"]=="RUNNING")]|sort_by(.["time-created"])|last|.id//empty' <<<"$inventory")"
+          [[ "$id" == ocid1.instance.* ]]
+          ip="$(oci compute instance list-vnics --region "$OCI_REGION" --instance-id "$id" --query 'data[0]."public-ip"' --raw-output)"
+          [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          echo "instance_id=$id" >> "$GITHUB_OUTPUT"
+          echo "temporary_ip=$ip" >> "$GITHUB_OUTPUT"
+
+          token="$(openssl rand -hex 24)"
+          printf '%s' "$token" > /tmp/nams-token
+          chmod 600 /tmp/nams-token
+
+          plugin="$(oci instance-agent plugin get --region "$OCI_REGION" --compartment-id "$compartment" --instanceagent-id "$id" --plugin-name 'Compute Instance Run Command' --query 'data.status' --raw-output 2>/dev/null || true)"
+          echo "Run Command plugin status: $plugin"
+          jq -n --arg plugin "$plugin" --arg id "$id" --arg ip "$ip" '{instance_id:$id,temporary_ip:$ip,run_command_plugin:$plugin}' > diagnostics/preflight.json
+          [ "$plugin" = RUNNING ] || { echo "Run Command plugin is not RUNNING" >&2; exit 41; }
+
+          repair_url="https://raw.githubusercontent.com/nitutravels/nitu-whatsapp-gateway/${REPAIR_REF}/nams-deploy/inplace-repair-active.sh"
+          script="$(cat <<SCRIPT
+          set -Eeuo pipefail
+          curl -fL --retry 8 --connect-timeout 20 '$repair_url' -o /root/nams-inplace-repair.sh
+          chmod 700 /root/nams-inplace-repair.sh
+          ADMIN_TOKEN='$token' NAMS_DOMAIN='$DOMAIN' NAMS_SOURCE_REF='$SOURCE_REF' NAMS_IMAGE_TAG='$IMAGE_TAG' bash /root/nams-inplace-repair.sh
+          SCRIPT
+          )"
+          jq -n --arg text "$script" '{source:{sourceType:"TEXT",text:$text}}' > /tmp/content.json
+          jq -n --arg id "$id" '{instanceIds:[$id]}' > /tmp/target.json
+          command_id="$(oci instance-agent command create --region "$OCI_REGION" --compartment-id "$compartment" --content file:///tmp/content.json --target file:///tmp/target.json --timeout-in-seconds 3300 --display-name 'NAMS targeted in-place repair' --query 'data.id' --raw-output)"
+          [[ "$command_id" == ocid1.instanceagentcommand.* ]]
+          echo "command_id=$command_id" >> "$GITHUB_OUTPUT"
+
+          state=''
+          for _ in $(seq 1 360); do
+            execution="$(oci instance-agent command-execution get --region "$OCI_REGION" --command-id "$command_id" --instance-id "$id" --output json 2>/dev/null || true)"
+            state="$(jq -r '.data["lifecycle-state"]//empty' <<<"$execution" 2>/dev/null || true)"
+            printf '%s' "$execution" > diagnostics/command-execution.json
+            case "$state" in SUCCEEDED) break;; FAILED|TIMED_OUT|CANCELED) echo "Run Command ended in $state" >&2; break;; esac
+            sleep 10
+          done
+          [ "$state" = SUCCEEDED ]
+
+          # Certify every required service through the candidate's public interface.
+          ok=0
+          for _ in $(seq 1 120); do
+            if curl -fsS --connect-timeout 5 --max-time 20 -H "X-NAMS-Probe: $token" "http://$ip/_probe/app/health" >diagnostics/app.json 2>/dev/null && \
+               curl -fsS --connect-timeout 5 --max-time 20 -H "X-NAMS-Probe: $token" "http://$ip/_probe/chromium/json/version" >diagnostics/chromium.json 2>/dev/null && \
+               curl -fsS --connect-timeout 5 --max-time 20 -H "X-NAMS-Probe: $token" "http://$ip/_probe/novnc/vnc.html" >diagnostics/novnc.html 2>/dev/null && \
+               curl -fsS --connect-timeout 5 --max-time 20 -H "X-NAMS-Probe: $token" "http://$ip/_probe/lightpanda/json/version" >diagnostics/lightpanda.json 2>/dev/null && \
+               curl -fsS --connect-timeout 5 --max-time 20 -H "X-NAMS-Probe: $token" "http://$ip/_probe/ollama/api/tags" >diagnostics/ollama.json 2>/dev/null && \
+               curl -fsS --connect-timeout 5 --max-time 20 -H "Authorization: Bearer $token" "http://$ip/" >diagnostics/dashboard.html 2>/dev/null && \
+               grep -q '"ok"' diagnostics/app.json && grep -q webSocketDebuggerUrl diagnostics/chromium.json && grep -qi noVNC diagnostics/novnc.html && jq -e '.models|length>0' diagnostics/ollama.json >/dev/null && grep -q NAMS diagnostics/dashboard.html; then ok=1; break; fi
+            sleep 10
+          done
+          [ "$ok" -eq 1 ]
+
+          private_id="$(vnic="$(oci compute instance list-vnics --region "$OCI_REGION" --instance-id "$id" --query 'data[0].id' --raw-output)"; oci network private-ip list --region "$OCI_REGION" --vnic-id "$vnic" --all --query 'data[0].id' --raw-output)"
+          reserved_json="$(oci network public-ip list --region "$OCI_REGION" --compartment-id "$compartment" --scope REGION --lifetime RESERVED --all --output json | jq -c --arg ip "$RESERVED_IP" '[.data[]|select(.["ip-address"]==$ip or .["display-name"]=="NAMS-v5-Reserved-IP" or .["display-name"]=="NAMS-Reserved-IP")][0]//empty')"
+          rid="$(jq -r '.id//empty' <<<"$reserved_json")"
+          rip="$(jq -r '.["ip-address"]//empty' <<<"$reserved_json")"
+          [[ "$rid" == ocid1.publicip.* ]]
+          current="$(oci network public-ip get --region "$OCI_REGION" --private-ip-id "$private_id" --query 'data.id' --raw-output 2>/dev/null || true)"
+          if [[ "$current" == ocid1.publicip.* && "$current" != "$rid" ]]; then oci network public-ip delete --region "$OCI_REGION" --public-ip-id "$current" --force >/dev/null; sleep 10; fi
+          oci network public-ip update --region "$OCI_REGION" --public-ip-id "$rid" --private-ip-id "$private_id" --force >/dev/null
+          for _ in $(seq 1 60); do assigned="$(oci network public-ip get --region "$OCI_REGION" --public-ip-id "$rid" --query 'data."assigned-entity-id"' --raw-output 2>/dev/null || true)"; [ "$assigned" = "$private_id" ] && break; sleep 5; done
+          [ "$assigned" = "$private_id" ]
+
+          for _ in $(seq 1 60); do
+            curl -fsS --connect-timeout 5 --max-time 20 -H "X-NAMS-Probe: $token" "http://$rip/_probe/app/health" >/dev/null 2>&1 && curl -fsS --connect-timeout 5 --max-time 20 -H "Authorization: Bearer $token" "http://$rip/" | grep -q NAMS && break
+            sleep 5
+          done
+          curl -fsS -H "X-NAMS-Probe: $token" "http://$rip/_probe/app/health" >/dev/null
+          curl -fsS -H "Authorization: Bearer $token" "http://$rip/" | grep -q NAMS
+          oci compute instance update --region "$OCI_REGION" --instance-id "$id" --freeform-tags "{\"NAMSBootstrapToken\":\"$token\",\"ManagedBy\":\"GitHubActions\",\"NAMSRepairRun\":\"$GITHUB_RUN_ID\"}" --force >/dev/null
+          jq -n --arg id "$id" --arg ip "$rip" --arg domain "$DOMAIN" '{status:"success",phase:"complete",instance_id:$id,public_ip:$ip,domain:$domain,message:"Active NAMS candidate repaired in place, fully certified, and reserved IP attached",shape:"VM.Standard.A1.Flex",ocpus:1,memory_gb:8}' > status/nams-deployment-via-waha.json
+          cat > diagnostics/nams-token-retrieval.txt <<EOF
+          oci compute instance get --region '$OCI_REGION' --instance-id '$id' --query 'data."freeform-tags".NAMSBootstrapToken' --raw-output
+          EOF
+
+      - name: Record exact result
+        if: always()
+        env:
+          REPAIR_OUTCOME: ${{ steps.repair.outcome }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p status diagnostics
+          if [ ! -f status/nams-deployment-via-waha.json ]; then
+            jq -n --arg outcome "$REPAIR_OUTCOME" --arg id '${{ steps.repair.outputs.instance_id }}' --arg ip '${{ steps.repair.outputs.temporary_ip }}' --arg command '${{ steps.repair.outputs.command_id }}' '{status:"failed",phase:"inplace_repair",message:("Targeted repair did not complete; outcome="+$outcome),instance_id:$id,temporary_ip:$ip,command_id:$command}' > status/nams-deployment-via-waha.json
+          fi
+          resolved="$(getent ahostsv4 "$DOMAIN" 2>/dev/null | awk 'NR==1{print $1}' || true)"
+          expected="$(jq -r '.public_ip//empty' status/nams-deployment-via-waha.json)"
+          jq --arg run_id "$GITHUB_RUN_ID" --arg run_url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --arg dns_ip "$resolved" --arg expected "$expected" '. + {run_id:$run_id,run_url:$run_url,dns_ip:$dns_ip,dns_matches_deployment:($dns_ip!="" and $expected!="" and $dns_ip==$expected),recorded_at:(now|todate)}' status/nams-deployment-via-waha.json > /tmp/result.json
+          mv /tmp/result.json status/nams-deployment-via-waha.json
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git pull --rebase origin main
+          git add status/nams-deployment-via-waha.json
+          if ! git diff --cached --quiet; then git commit -m "Record targeted NAMS in-place repair run $GITHUB_RUN_ID [skip ci]"; git push; fi
+          cat status/nams-deployment-via-waha.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nams-inplace-repair
+          path: diagnostics/
+          retention-days: 14
+
+      - name: Enforce completion
+        if: always()
+        run: |
+          test "$(jq -r '.status' status/nams-deployment-via-waha.json)" = success
