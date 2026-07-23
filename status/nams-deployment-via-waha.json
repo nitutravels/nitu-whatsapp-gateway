@@ -1,12 +1,13 @@
 {
   "status": "failed",
   "phase": "controller",
-  "message": "Recovery controller produced no result",
+  "message": "Controller returned without producing its required result",
   "exit_code": 40,
-  "run_id": "29960413351",
-  "run_url": "https://github.com/nitutravels/nitu-whatsapp-gateway/actions/runs/29960413351",
+  "controller_tail": "+ set +x\nFound 1 unfinished NAMS candidate(s); preserving boot volumes and retiring only those candidates.\nRetiring unfinished NAMS candidate in FAULT-DOMAIN-2.\nRecovery will skip the previously used placement FAULT-DOMAIN-2.\n[2026-07-22T23:41:16Z] Validating OCI identity and immutable image manifests\n[2026-07-22T23:41:18Z] Resolving the WAHA network placement without modifying WAHA\n[2026-07-22T23:41:41Z] Launching a capacity-aware A1 replacement at 1 OCPU / 8 GB\n[2026-07-22T23:41:45Z] Launch accepted with placement profile FAULT-DOMAIN-1\n[2026-07-22T23:42:26Z] Candidate running on temporary IP 137.23.35.53\n[2026-07-22T23:45:16Z] Candidate certification: 2 minute(s) elapsed\n[2026-07-22T23:48:16Z] Candidate certification: 4 minute(s) elapsed\n[2026-07-22T23:50:58Z] Candidate certification: 6 minute(s) elapsed\n[2026-07-22T23:53:22Z] Candidate certification: 8 minute(s) elapsed\n[2026-07-22T23:55:47Z] Candidate certification: 10 minute(s) elapsed\n[2026-07-22T23:58:12Z] Candidate certification: 12 minute(s) elapsed\n[2026-07-23T00:00:36Z] Candidate certification: 14 minute(s) elapsed\n[2026-07-23T00:03:01Z] Candidate certification: 16 minute(s) elapsed\n[2026-07-23T00:05:26Z] Candidate certification: 18 minute(s) elapsed\n[2026-07-23T00:07:50Z] Candidate certification: 20 minute(s) elapsed\n[2026-07-23T00:10:15Z] Candidate certification: 22 minute(s) elapsed\n[2026-07-23T00:12:39Z] Candidate certification: 24 minute(s) elapsed\n[2026-07-23T00:15:04Z] Candidate certification: 26 minute(s) elapsed\n[2026-07-23T00:17:29Z] Candidate certification: 28 minute(s) elapsed\n[2026-07-23T00:19:53Z] Candidate certification: 30 minute(s) elapsed\n[2026-07-23T00:22:18Z] Candidate certification: 32 minute(s) elapsed\n[2026-07-23T00:25:15Z] Candidate certification: 34 minute(s) elapsed\n[2026-07-23T00:28:15Z] Candidate certification: 36 minute(s) elapsed\n[2026-07-23T00:31:15Z] Candidate certification: 38 minute(s) elapsed\n[2026-07-23T00:34:15Z] Candidate certification: 40 minute(s) elapsed\n[2026-07-23T00:37:16Z] Candidate certification: 42 minute(s) elapsed\n[2026-07-23T00:40:16Z] Candidate certification: 44 minute(s) elapsed\n[2026-07-23T00:43:16Z] Candidate certification: 46 minute(s) elapsed\n[2026-07-23T00:46:16Z] Candidate certification: 48 minute(s) elapsed\n[2026-07-23T00:49:16Z] Candidate certification: 50 minute(s) elapsed\n[2026-07-23T00:52:16Z] Candidate certification: 52 minute(s) elapsed\n[2026-07-23T00:55:16Z] Candidate certification: 54 minute(s) elapsed\n[2026-07-23T00:58:17Z] Candidate certification: 56 minute(s) elapsed\n[2026-07-23T01:01:17Z] Candidate certification: 58 minute(s) elapsed\n[2026-07-23T01:04:17Z] Candidate certification: 60 minute(s) elapsed",
+  "run_id": "29966771388",
+  "run_url": "https://github.com/nitutravels/nitu-whatsapp-gateway/actions/runs/29966771388",
   "workflow_outcome": "failure",
   "dns_ip": "161.118.166.225",
   "dns_matches_deployment": false,
-  "recorded_at": "2026-07-22T23:44:13Z"
+  "recorded_at": "2026-07-23T01:06:07Z"
 }
