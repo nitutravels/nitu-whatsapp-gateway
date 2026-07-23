@@ -1,0 +1,150 @@
+name: nams-e2-micro
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 8m
+    max-file: "3"
+
+services:
+  caddy:
+    image: caddy:2.10.2-alpine
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro,Z
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      app:
+        condition: service_healthy
+    mem_limit: 96m
+    cpus: 0.10
+    networks: [nams]
+    logging: *logging
+
+  app:
+    build:
+      context: ./app
+    image: nams-e2-app:local
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_OPTIONS: --max-old-space-size=256
+    volumes:
+      - ./data:/app/data:Z
+      - ./config:/app/config:ro,Z
+      - ./assets:/app/assets:Z
+    depends_on:
+      lightpanda:
+        condition: service_started
+      chromium:
+        condition: service_started
+      ollama:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 24
+      start_period: 40s
+    mem_limit: 384m
+    cpus: 0.55
+    networks: [nams]
+    logging: *logging
+
+  lightpanda:
+    image: lightpanda/browser:nightly
+    command:
+      - serve
+      - --obey-robots
+      - --host
+      - 0.0.0.0
+      - --advertise-host
+      - lightpanda
+      - --port
+      - "9222"
+      - --cdp-max-connections
+      - "1"
+      - --storage-engine
+      - sqlite
+      - --storage-sqlite-path
+      - /data/lightpanda.sqlite
+    restart: unless-stopped
+    volumes:
+      - ./data/lightpanda:/data:Z
+    mem_limit: 256m
+    cpus: 0.25
+    networks: [nams]
+    logging: *logging
+
+  chromium:
+    build:
+      context: ./chromium
+    image: nams-e2-chromium:local
+    restart: unless-stopped
+    shm_size: 192m
+    volumes:
+      - ./data/chromium:/data:Z
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9223/json/version >/dev/null && curl -fsS http://127.0.0.1:6080/vnc.html >/dev/null"]
+      interval: 15s
+      timeout: 6s
+      retries: 40
+      start_period: 60s
+    mem_limit: 700m
+    cpus: 0.55
+    networks: [nams]
+    logging: *logging
+
+  ollama:
+    image: ollama/ollama:0.11.4
+    restart: unless-stopped
+    environment:
+      OLLAMA_KEEP_ALIVE: 0s
+      OLLAMA_NUM_PARALLEL: "1"
+      OLLAMA_MAX_LOADED_MODELS: "1"
+      OLLAMA_MAX_QUEUE: "2"
+      OLLAMA_CONTEXT_LENGTH: "2048"
+      OLLAMA_HOST: 0.0.0.0:11434
+    volumes:
+      - ollama_data:/root/.ollama
+    mem_limit: 768m
+    cpus: 0.70
+    networks: [nams]
+    logging: *logging
+
+  model-loader:
+    image: ollama/ollama:0.11.4
+    restart: "no"
+    env_file: .env
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        until ollama list >/tmp/models 2>/dev/null; do sleep 4; done
+        if ! grep -q "^$${OLLAMA_MODEL}[[:space:]]" /tmp/models; then
+          ollama pull "$${OLLAMA_MODEL}"
+        fi
+        ollama list
+    depends_on:
+      ollama:
+        condition: service_started
+    mem_limit: 512m
+    cpus: 0.55
+    networks: [nams]
+    logging: *logging
+
+networks:
+  nams:
+    driver: bridge
+
+volumes:
+  caddy_data:
+  caddy_config:
+  ollama_data:
