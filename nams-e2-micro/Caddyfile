@@ -1,0 +1,47 @@
+{
+  email nitutravels@gmail.com
+  auto_https disable_redirects
+}
+
+(nams_routes) {
+  encode zstd gzip
+
+  @probe header X-NAMS-Probe {$ADMIN_TOKEN}
+  handle @probe {
+    handle_path /_probe/app/* {
+      reverse_proxy app:8080
+    }
+    handle_path /_probe/chromium/* {
+      reverse_proxy chromium:9223
+    }
+    handle_path /_probe/novnc/* {
+      reverse_proxy chromium:6080
+    }
+    handle_path /_probe/lightpanda/* {
+      reverse_proxy lightpanda:9222
+    }
+    handle_path /_probe/ollama/* {
+      reverse_proxy ollama:11434
+    }
+    respond "Unknown probe" 404
+  }
+
+  handle {
+    reverse_proxy app:8080
+  }
+
+  header {
+    X-Content-Type-Options "nosniff"
+    X-Frame-Options "SAMEORIGIN"
+    Referrer-Policy "strict-origin-when-cross-origin"
+  }
+}
+
+:80 {
+  import nams_routes
+}
+
+{$NAMS_DOMAIN:seo.nitutravels.in} {
+  import nams_routes
+  header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+}
