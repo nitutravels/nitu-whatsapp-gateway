@@ -1,0 +1,106 @@
+name: Diagnose active NAMS candidate
+run-name: Diagnose NAMS candidate ${{ github.run_number }}
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/nams-diagnose-active.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  OCI_REGION: ap-mumbai-1
+  TARGET_NAME: NAMS-Lightpanda-Agent
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure OCI CLI
+        env:
+          OCI_PRIVATE_KEY_PEM: ${{ secrets.OCI_PRIVATE_KEY }}
+          OCI_FINGERPRINT_VALUE: ${{ secrets.OCI_FINGERPRINT }}
+          OCI_USER_VALUE: ${{ secrets.OCI_USER_OCID }}
+          OCI_TENANCY_VALUE: ${{ secrets.OCI_TENANCY_OCID }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$HOME/.oci"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          value=os.environ['OCI_PRIVATE_KEY_PEM'].strip()
+          if len(value)>=2 and value[0]==value[-1] and value[0] in {'"',"'"}: value=value[1:-1]
+          if '\\n' in value and '\n' not in value: value=value.replace('\\r','').replace('\\n','\n')
+          Path.home().joinpath('.oci/key.pem').write_text(value.replace('\r','').strip()+'\n')
+          PY
+          chmod 600 "$HOME/.oci/key.pem"
+          cat >"$HOME/.oci/config" <<EOF
+          [DEFAULT]
+          user=$OCI_USER_VALUE
+          fingerprint=$(printf '%s' "$OCI_FINGERPRINT_VALUE" | tr -d '[:space:]')
+          tenancy=$OCI_TENANCY_VALUE
+          region=$OCI_REGION
+          key_file=$HOME/.oci/key.pem
+          EOF
+          pipx install --quiet oci-cli
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Capture exact candidate diagnostics
+        env:
+          TENANCY: ${{ secrets.OCI_TENANCY_OCID }}
+          CONFIGURED_COMPARTMENT: ${{ vars.OCI_COMPARTMENT_OCID }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p diagnostics status
+          compartment="$CONFIGURED_COMPARTMENT"
+          if [[ "$compartment" != ocid1.compartment.* ]]; then
+            compartment="$(oci iam compartment list --region "$OCI_REGION" --compartment-id "$TENANCY" --compartment-id-in-subtree true --access-level ACCESSIBLE --all --output json | jq -r '[.data[]|select(.name=="NituWAGateway" and .["lifecycle-state"]=="ACTIVE")|.id][0]//empty')"
+          fi
+          [[ "$compartment" == ocid1.compartment.* ]]
+          inventory="$(oci compute instance list --region "$OCI_REGION" --compartment-id "$compartment" --display-name "$TARGET_NAME" --all --output json)"
+          printf '%s' "$inventory" | jq '{instances:[.data[]|{id,display_name:.["display-name"],state:.["lifecycle-state"],shape,ocpus:.["shape-config"].ocpus,memory_gb:.["shape-config"].["memory-in-gbs"],created:.["time-created"],fault_domain:.["fault-domain"],availability_domain:.["availability-domain"],freeform_tags:.["freeform-tags"]|del(.NAMSBootstrapToken)}]}' > diagnostics/inventory.json
+          id="$(printf '%s' "$inventory" | jq -r '[.data[]|select(.["lifecycle-state"]!="TERMINATED")]|sort_by(.["time-created"])|last|.id//empty')"
+          if [[ "$id" != ocid1.instance.* ]]; then
+            jq -n '{status:"blocked",phase:"diagnostics",message:"No active NAMS candidate exists"}' > status/nams-diagnostic.json
+          else
+            oci compute instance list-vnics --region "$OCI_REGION" --instance-id "$id" --output json | jq '{vnics:[.data[]|{id,state:.["lifecycle-state"],public_ip:.["public-ip"],private_ip:.["private-ip"],subnet_id:.["subnet-id"],nsg_ids:.["nsg-ids"]}]}' > diagnostics/vnics.json
+            history="$(oci compute console-history capture --region "$OCI_REGION" --instance-id "$id" --query 'data.id' --raw-output 2>/dev/null || true)"
+            if [[ "$history" == ocid1.consolehistory.* ]]; then
+              for _ in $(seq 1 90); do state="$(oci compute console-history get --region "$OCI_REGION" --instance-console-history-id "$history" --query 'data.["lifecycle-state"]' --raw-output 2>/dev/null || true)"; [ "$state" = SUCCEEDED ] && break; [ "$state" = FAILED ] && break; sleep 5; done
+              oci compute console-history get-content --region "$OCI_REGION" --instance-console-history-id "$history" --file diagnostics/console.txt >/dev/null 2>&1 || true
+            fi
+            ip="$(jq -r '.vnics[0].public_ip//empty' diagnostics/vnics.json)"
+            http=unreachable
+            [ -n "$ip" ] && curl -sS --connect-timeout 5 --max-time 15 -D diagnostics/http-headers.txt "http://$ip/" -o diagnostics/http-body.txt && http=reachable || true
+            phase="$(grep -Eo 'FAILED:[^[:space:]]+|RUNNING:[^[:space:]]+|SUCCESS' diagnostics/console.txt 2>/dev/null | tail -n1 || true)"
+            errors="$(grep -Eai 'cloud-init.*(fail|error)|FAILED:|docker.*(error|fail)|no space|out of memory|oom|manifest unknown|unauthorized|connection refused|timed out' diagnostics/console.txt 2>/dev/null | tail -n 25 | sed 's/[[:cntrl:]]//g' | head -c 6000 || true)"
+            jq -n --arg id "$id" --arg ip "$ip" --arg http "$http" --arg phase "$phase" --arg errors "$errors" '{status:"diagnosed",instance_id:$id,public_ip:$ip,http:$http,installer_phase:$phase,errors:$errors}' > status/nams-diagnostic.json
+          fi
+          cat status/nams-diagnostic.json
+
+      - name: Commit sanitized diagnosis
+        if: always()
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git pull --rebase origin main
+          git add status/nams-diagnostic.json
+          if ! git diff --cached --quiet; then
+            git commit -m "Record exact active NAMS diagnosis for run $GITHUB_RUN_ID [skip ci]"
+            git push
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nams-active-diagnostics
+          path: diagnostics/
+          retention-days: 7
