@@ -2,12 +2,12 @@
   "status": "failed",
   "phase": "controller",
   "message": "Controller returned without producing its required result",
-  "exit_code": 32,
-  "controller_tail": "+ set +x\n[2026-07-23T13:08:52Z] Validating OCI identity and immutable image manifests\n[2026-07-23T13:08:54Z] Resolving the WAHA network placement without modifying WAHA\n[2026-07-23T13:09:19Z] Launching a capacity-aware A1 replacement at 1 OCPU / 8 GB\n[2026-07-23T13:11:00Z] Placement auto remains unavailable after classified handling; trying the next distinct fault-domain placement\n[2026-07-23T13:12:39Z] OCI rate limited profile FAULT-DOMAIN-1; cooling down for 180 seconds before one controlled retry\n[2026-07-23T13:17:21Z] Placement FAULT-DOMAIN-1 remains unavailable after classified handling; trying the next distinct fault-domain placement\n[2026-07-23T13:19:01Z] OCI rate limited profile FAULT-DOMAIN-2; cooling down for 180 seconds before one controlled retry\n[2026-07-23T13:23:42Z] Placement FAULT-DOMAIN-2 remains unavailable after classified handling; trying the next distinct fault-domain placement\n[2026-07-23T13:25:21Z] Non-capacity launch failure encountered; stopping targeted alternatives\nRequestException:\n{\n    \"client_version\": \"Oracle-PythonCLI/3.89.3\",\n    \"logging_tips\": \"Please run the OCI CLI command using --debug flag to find more debug information.\",\n    \"message\": \"The connection to endpoint timed out.\",\n    \"request_endpoint\": null,\n    \"target_service\": \"CLI\",\n    \"timestamp\": \"2026-07-23T13:25:21.532111\",\n    \"troubleshooting_tips\": \" See [https://docs.oracle.com/iaas/Content/API/SDKDocs/clitroubleshooting.htm] for more information about resolving this error. If you are unable to resolve this issue, run this CLI command with --debug option and contact Oracle support and provide them the full error message.\"\n}",
-  "run_id": "30009881728",
-  "run_url": "https://github.com/nitutravels/nitu-whatsapp-gateway/actions/runs/30009881728",
+  "exit_code": 31,
+  "controller_tail": "+ set +x\n[2026-07-23T15:35:15Z] Validating OCI identity and immutable image manifests\n[2026-07-23T15:35:18Z] Resolving the WAHA network placement without modifying WAHA\n/home/runner/work/_temp/nams-preclean-30021153623/controller.sh: line 128: [: : integer expression expected\n[2026-07-23T15:35:28Z] An active NAMS compute instance already exists; refusing duplicate launch",
+  "run_id": "30021153623",
+  "run_url": "https://github.com/nitutravels/nitu-whatsapp-gateway/actions/runs/30021153623",
   "workflow_outcome": "failure",
   "dns_ip": "161.118.166.225",
   "dns_matches_deployment": false,
-  "recorded_at": "2026-07-23T13:25:21Z"
+  "recorded_at": "2026-07-23T15:35:28Z"
 }
