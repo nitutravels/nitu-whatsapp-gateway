@@ -102,7 +102,7 @@ jobs:
           OCI_TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
         run: oci iam region-subscription list --region "$OCI_REGION" --tenancy-id "$OCI_TENANCY_OCID" --all >/dev/null
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
         if: steps.guard.outputs.skip != 'true'
 
       - name: Verify certified ARM64 images
