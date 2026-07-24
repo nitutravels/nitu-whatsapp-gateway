@@ -137,7 +137,7 @@ jobs:
           git add status/nams-deployment-via-waha.json
           git diff --cached --quiet || { git commit -m "Record secure NAMS recovery v2 run $GITHUB_RUN_ID [skip ci]"; git push; }
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: nams-secure-recovery-v2

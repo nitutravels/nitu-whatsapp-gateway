@@ -172,7 +172,7 @@ jobs:
             git push
           fi
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: steps.guard.outputs.skip != 'true' && always()
         with:
           name: nams-guarded-recovery
