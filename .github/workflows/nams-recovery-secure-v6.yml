@@ -218,7 +218,7 @@ jobs:
 
       - name: Upload sanitized recovery evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: nams-secure-recovery-v7
           path: deployment-evidence/
