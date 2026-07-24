@@ -25,7 +25,7 @@ jobs:
     timeout-minutes: 25
     steps:
       - name: Checkout operations repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Configure OCI CLI from existing production secrets
         shell: bash
