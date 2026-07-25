@@ -64,7 +64,7 @@ echo "Public IP: $PUBLIC_IP"
 say "2/6 Waiting for cloud-init and checking every service"
 probe(){ local path="$1"; shift; curl -fsS --connect-timeout 8 --max-time 60 -H "X-NAMS-Probe: $TOKEN" "$@" "http://$PUBLIC_IP$path"; }
 READY=0
-for i in $(seq 1 240); do
+for i in $(seq 1 1080); do
   if probe /_probe/app/health >/tmp/nams-resume-app.json 2>/dev/null && \
      probe /_probe/chromium/json/version >/tmp/nams-resume-chromium.json 2>/dev/null && \
      probe /_probe/novnc/vnc.html >/tmp/nams-resume-novnc.html 2>/dev/null && \
@@ -73,15 +73,15 @@ for i in $(seq 1 240); do
     READY=1
     break
   fi
-  if [ $((i % 12)) -eq 0 ]; then
+  if [ $((i % 60)) -eq 0 ]; then
     echo "Verification wait: $((i/12)) minute(s)"
-    capture_console "$CANDIDATE_ID" 20
+    capture_console "$CANDIDATE_ID" 30
   fi
   sleep 5
 done
 if [ "$READY" -ne 1 ]; then
-  capture_console "$CANDIDATE_ID" 160
-  fail "Existing candidate did not pass full verification. It remains running for diagnosis; no replacement VM was created."
+  capture_console "$CANDIDATE_ID" 200
+  fail "Existing candidate did not pass full verification within 90 minutes. It remains running for diagnosis; no replacement VM was created."
 fi
 
 grep -q '"ok"' /tmp/nams-resume-app.json
