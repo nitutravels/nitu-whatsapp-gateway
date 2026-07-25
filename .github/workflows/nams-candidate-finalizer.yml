@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   OCI_REGION: ${{ vars.OCI_REGION || 'ap-mumbai-1' }}
@@ -91,14 +91,30 @@ jobs:
         run: |
           set -Eeuo pipefail
           chmod +x nams-e2-micro/github-finalize-candidate.sh
-          NAMS_STATUS_FILE="$RUNNER_TEMP/nams-candidate-finalizer.json" nams-e2-micro/github-finalize-candidate.sh
-          cat "$RUNNER_TEMP/nams-candidate-finalizer.json"
+          NAMS_STATUS_FILE="status/nams-candidate-finalizer.json" nams-e2-micro/github-finalize-candidate.sh
+          cat status/nams-candidate-finalizer.json
+
+      - name: Persist current status in repository
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [ -f status/nams-candidate-finalizer.json ] || exit 0
+          git config user.name "nams-finalizer[bot]"
+          git config user.email "nams-finalizer[bot]@users.noreply.github.com"
+          git add status/nams-candidate-finalizer.json
+          if git diff --cached --quiet; then
+            echo "No status change to commit."
+          else
+            git commit -m "Update NAMS candidate finalizer status [skip ci]"
+            git push
+          fi
 
       - name: Upload current status
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: nams-candidate-finalizer-${{ github.run_number }}
-          path: ${{ runner.temp }}/nams-candidate-finalizer.json
+          path: status/nams-candidate-finalizer.json
           if-no-files-found: warn
           retention-days: 14
