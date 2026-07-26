@@ -1,16 +1,10 @@
 {
-  "state": "blocked",
-  "message": "Candidate installation is stalled; public verification has failed beyond the allowed installation window.",
-  "public_ip": "130.210.19.150",
+  "state": "pending",
+  "message": "No running NAMS candidate is visible yet.",
+  "public_ip": "",
   "domain": "seo.nitutravels.in",
-  "domain_ip": "161.118.166.225",
-  "candidate_age_minutes": 1717,
-  "failed_probes": [
-    "app",
-    "chromium",
-    "novnc",
-    "lightpanda",
-    "ollama"
-  ],
-  "checked_at": "2026-07-26T17:29:00Z"
+  "domain_ip": "",
+  "candidate_age_minutes": 0,
+  "failed_probes": [],
+  "checked_at": "2026-07-26T18:35:53Z"
 }
