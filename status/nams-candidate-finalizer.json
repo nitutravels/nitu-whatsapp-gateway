@@ -1,8 +1,16 @@
 {
-  "state": "installing",
-  "message": "Cloud-init installation is still running or one service is not ready.",
+  "state": "blocked",
+  "message": "Candidate installation is stalled; public verification has failed beyond the allowed installation window.",
   "public_ip": "130.210.19.150",
   "domain": "seo.nitutravels.in",
-  "domain_ip": "",
-  "checked_at": "2026-07-26T16:15:45Z"
+  "domain_ip": "161.118.166.225",
+  "candidate_age_minutes": 1656,
+  "failed_probes": [
+    "app",
+    "chromium",
+    "novnc",
+    "lightpanda",
+    "ollama"
+  ],
+  "checked_at": "2026-07-26T16:27:16Z"
 }
