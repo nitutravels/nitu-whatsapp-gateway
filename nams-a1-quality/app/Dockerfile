@@ -19,6 +19,7 @@ if old in s:
 elif "server.on('upgrade',browserProxy.upgrade);" not in s:
     raise SystemExit('Expected NAMS listen statement not found')
 s=s.replace('AbortSignal.timeout(240000)', 'AbortSignal.timeout(900000)')
+s=s.replace("secure:true,maxAge:30*24*3600*1000", "secure:(req.headers['x-forwarded-proto']==='https'),maxAge:30*24*3600*1000")
 p.write_text(s)
 PY
 
