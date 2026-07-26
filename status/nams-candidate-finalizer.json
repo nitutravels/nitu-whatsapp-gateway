@@ -4,7 +4,7 @@
   "public_ip": "130.210.19.150",
   "domain": "seo.nitutravels.in",
   "domain_ip": "161.118.166.225",
-  "candidate_age_minutes": 1656,
+  "candidate_age_minutes": 1717,
   "failed_probes": [
     "app",
     "chromium",
@@ -12,5 +12,5 @@
     "lightpanda",
     "ollama"
   ],
-  "checked_at": "2026-07-26T16:27:16Z"
+  "checked_at": "2026-07-26T17:29:00Z"
 }
