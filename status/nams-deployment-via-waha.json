@@ -3,11 +3,11 @@
   "phase": "controller",
   "message": "Controller returned without producing its required result",
   "exit_code": 31,
-  "controller_tail": "+ set +x\n[2026-07-27T20:40:49Z] Validating OCI identity and immutable image manifests\n[2026-07-27T20:40:51Z] Resolving the WAHA network placement without modifying WAHA\n/home/runner/work/_temp/nams-preclean-30303539371/controller.sh: line 128: [: : integer expression expected\n[2026-07-27T20:41:02Z] An active NAMS compute instance already exists; refusing duplicate launch",
-  "run_id": "30303539371",
-  "run_url": "https://github.com/nitutravels/nitu-whatsapp-gateway/actions/runs/30303539371",
+  "controller_tail": "+ set +x\n[2026-07-27T22:14:55Z] Validating OCI identity and immutable image manifests\n[2026-07-27T22:14:57Z] Resolving the WAHA network placement without modifying WAHA\n/home/runner/work/_temp/nams-preclean-30309963981/controller.sh: line 128: [: : integer expression expected\n[2026-07-27T22:15:08Z] An active NAMS compute instance already exists; refusing duplicate launch",
+  "run_id": "30309963981",
+  "run_url": "https://github.com/nitutravels/nitu-whatsapp-gateway/actions/runs/30309963981",
   "workflow_outcome": "failure",
   "dns_ip": "207.174.213.150",
   "dns_matches_deployment": false,
-  "recorded_at": "2026-07-27T20:41:02Z"
+  "recorded_at": "2026-07-27T22:15:08Z"
 }
