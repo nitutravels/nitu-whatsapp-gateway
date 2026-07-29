@@ -59,7 +59,7 @@ jobs:
           pipx install --quiet oci-cli
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       - name: Apply targeted inventory fix
         run: |
