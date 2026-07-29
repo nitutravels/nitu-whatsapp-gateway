@@ -156,7 +156,7 @@ jobs:
           git add status/nams-deployment-via-waha.json
           if ! git diff --cached --quiet; then git commit -m "Record emergency NAMS recovery for run $GITHUB_RUN_ID [skip ci]"; git push; fi
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: nams-emergency-recovery

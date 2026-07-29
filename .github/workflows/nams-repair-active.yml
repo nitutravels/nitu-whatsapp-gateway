@@ -177,7 +177,7 @@ jobs:
           if ! git diff --cached --quiet; then git commit -m "Record targeted NAMS in-place repair run $GITHUB_RUN_ID [skip ci]"; git push; fi
           cat status/nams-deployment-via-waha.json
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: nams-inplace-repair

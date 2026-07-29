@@ -78,7 +78,7 @@ jobs:
             echo 'WAHA_CANDIDATE_ARTIFACT_PROBE_END'
           } > docs/waha-candidate-artifact-probe.txt
           cat docs/waha-candidate-artifact-probe.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: waha-candidate-artifact-probe
