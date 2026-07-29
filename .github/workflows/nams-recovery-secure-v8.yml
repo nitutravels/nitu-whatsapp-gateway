@@ -32,7 +32,7 @@ jobs:
     timeout-minutes: 110
     steps:
       - name: Checkout operations repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Validate production credentials
         shell: bash

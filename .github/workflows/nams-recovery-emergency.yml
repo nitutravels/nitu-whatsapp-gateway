@@ -33,7 +33,7 @@ jobs:
     environment: production
     timeout-minutes: 110
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Validate controller
         shell: bash
