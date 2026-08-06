@@ -1,9 +1,8 @@
 name: Purge all Actions history
 
 on:
-  push:
-    paths:
-      - ".github/workflows/purge-actions-history.yml"
+  schedule:
+    - cron: "*/5 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -25,7 +24,7 @@ jobs:
           set -euo pipefail
 
           mapfile -t run_ids < <(
-            gh api --paginate "/repos/${REPOSITORY}/actions/runs?per_page=100"               --jq '.workflow_runs[].id'
+            gh api --paginate "/repos/${REPOSITORY}/actions/runs?per_page=100" --jq '.workflow_runs[].id'
           )
 
           echo "Found ${#run_ids[@]} run records."
@@ -61,7 +60,10 @@ jobs:
         run: |
           set -euo pipefail
           workflow_sha="$(gh api "/repos/${REPOSITORY}/contents/${WORKFLOW_PATH}" --jq '.sha')"
-          gh api --method DELETE "/repos/${REPOSITORY}/contents/${WORKFLOW_PATH}"             -f message='Remove temporary Actions history purger'             -f sha="${workflow_sha}"             -f branch='main' >/dev/null
+          gh api --method DELETE "/repos/${REPOSITORY}/contents/${WORKFLOW_PATH}" \
+            -f message='Remove temporary Actions history purger' \
+            -f sha="${workflow_sha}" \
+            -f branch='main' >/dev/null
 
       - name: Delete this cleanup run
         if: always()
