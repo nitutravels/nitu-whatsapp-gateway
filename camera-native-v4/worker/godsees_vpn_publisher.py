@@ -15,11 +15,10 @@ import json
 import os
 import socket
 import struct
-import subprocess
 import sys
 import time
 from dataclasses import dataclass
-from typing import BinaryIO, Optional
+from typing import Optional
 
 DEFAULT_WORKER_SOCKET = "/run/nitu-camera/godsees.sock"
 DEFAULT_INTERFACE = "nitu360"
@@ -27,20 +26,11 @@ MAX_FRAME = 8 * 1024 * 1024
 RECORD_MAGIC = b"\x20\x14\x11\x04"
 MEDIA_MARKERS = {b"\x1d\x00", b"\x1d\x02"}
 MEDIA_TYPES = {2, 3, 4}
+ETH_P_IP = 0x0800
 
 
 class PublisherError(RuntimeError):
     pass
-
-
-def read_exact(stream: BinaryIO, n: int) -> bytes:
-    out = bytearray()
-    while len(out) < n:
-        chunk = stream.read(n - len(out))
-        if not chunk:
-            raise EOFError
-        out.extend(chunk)
-    return bytes(out)
 
 
 def send_frame(sock: socket.socket, data: bytes) -> None:
@@ -72,7 +62,10 @@ def connect_worker(path: str, camera_id: str) -> socket.socket:
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     s.settimeout(10)
     s.connect(path)
-    req = json.dumps({"op": "publish", "camera_id": camera_id, "format": "fastconnect-datagram"}, separators=(",", ":")).encode()
+    req = json.dumps(
+        {"op": "publish", "camera_id": camera_id, "format": "fastconnect-datagram"},
+        separators=(",", ":"),
+    ).encode()
     send_frame(s, req)
     ack = json.loads(recv_frame(s).decode())
     if not ack.get("ok"):
@@ -81,69 +74,22 @@ def connect_worker(path: str, camera_id: str) -> socket.socket:
     return s
 
 
-def pcap_header(stream: BinaryIO) -> tuple[str, int]:
-    hdr = read_exact(stream, 24)
-    magic = hdr[:4]
-    if magic == b"\xd4\xc3\xb2\xa1":
-        endian = "<"
-    elif magic == b"\xa1\xb2\xc3\xd4":
-        endian = ">"
-    elif magic in {b"\x4d\x3c\xb2\xa1", b"\xa1\xb2\x3c\x4d"}:
-        endian = "<" if magic == b"\x4d\x3c\xb2\xa1" else ">"
-    else:
-        raise PublisherError(f"unsupported pcap magic {magic.hex()}")
-    linktype = struct.unpack_from(endian + "I", hdr, 20)[0]
-    return endian, linktype
-
-
-def iter_pcap(stream: BinaryIO):
-    endian, linktype = pcap_header(stream)
-    while True:
-        try:
-            rec = read_exact(stream, 16)
-        except EOFError:
-            return
-        _ts_s, _ts_frac, incl, _orig = struct.unpack(endian + "IIII", rec)
-        if incl > 4 * 1024 * 1024:
-            raise PublisherError(f"pcap record too large: {incl}")
-        frame = read_exact(stream, incl)
-        yield linktype, frame
-
-
-def ipv4_from_frame(frame: bytes, linktype: int) -> Optional[bytes]:
-    if linktype == 1:
-        if len(frame) < 14 or frame[12:14] != b"\x08\x00":
-            return None
-        return frame[14:]
-    if linktype in {101, 228}:
-        return frame if frame and frame[0] >> 4 == 4 else None
-    if linktype == 113:
-        if len(frame) < 16 or frame[14:16] != b"\x08\x00":
-            return None
-        return frame[16:]
-    if linktype == 276:
-        if len(frame) < 20 or frame[0:2] != b"\x08\x00":
-            return None
-        return frame[20:]
-    if frame and frame[0] >> 4 == 4:
-        return frame
-    return None
-
-
-def udp_payload(frame: bytes, linktype: int) -> Optional[tuple[tuple[str, int, str, int], bytes]]:
-    ip = ipv4_from_frame(frame, linktype)
-    if not ip or len(ip) < 28 or ip[0] >> 4 != 4:
+def ipv4_udp_payload(ip: bytes) -> Optional[tuple[tuple[str, int, str, int], bytes]]:
+    if len(ip) < 28 or ip[0] >> 4 != 4:
         return None
     ihl = (ip[0] & 0x0F) * 4
     if ihl < 20 or len(ip) < ihl + 8 or ip[9] != socket.IPPROTO_UDP:
         return None
+    total_len = int.from_bytes(ip[2:4], "big")
+    if total_len >= ihl + 8:
+        ip = ip[: min(len(ip), total_len)]
     src = socket.inet_ntoa(ip[12:16])
     dst = socket.inet_ntoa(ip[16:20])
     udp = ip[ihl:]
     src_port, dst_port, udp_len, _checksum = struct.unpack("!HHHH", udp[:8])
     if udp_len < 8:
         return None
-    payload = udp[8:min(len(udp), udp_len)]
+    payload = udp[8 : min(len(udp), udp_len)]
     return (src, src_port, dst, dst_port), payload
 
 
@@ -154,7 +100,7 @@ class FlowState:
 
 
 class AuthorizedMediaFilter:
-    """Pass only verified GodSees media starts and their continuation datagrams."""
+    """Pass only verified GodSees media starts and continuation datagrams."""
 
     def __init__(self) -> None:
         self.flows: dict[tuple[str, int, str, int], FlowState] = {}
@@ -187,68 +133,73 @@ class AuthorizedMediaFilter:
         return False
 
 
-def start_tcpdump(interface: str) -> subprocess.Popen:
-    # WireGuard does not need promiscuous mode. Keeping capture non-promiscuous
-    # avoids CAP_NET_ADMIN while the hardened systemd unit grants only CAP_NET_RAW.
-    # -Z root prevents tcpdump from trying to switch to the tcpdump account after
-    # the service has already been sandboxed with NoNewPrivileges.
-    cmd = [
-        "/usr/bin/tcpdump", "-i", interface, "-p", "-Z", "root",
-        "-nn", "-U", "-s", "0", "-w", "-", "udp", "port", "80",
-    ]
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
-    time.sleep(0.25)
-    if proc.poll() is not None:
-        detail = ""
-        if proc.stderr is not None:
-            try:
-                detail = proc.stderr.read(4096).decode(errors="replace").strip()
-            except Exception:
-                pass
-        raise PublisherError(f"tcpdump failed rc={proc.returncode}: {detail[:300]}")
-    return proc
+def open_capture(interface: str) -> socket.socket:
+    """Open a non-promiscuous L3 packet socket on the dedicated WireGuard link.
+
+    AF_PACKET/SOCK_DGRAM returns the network-layer packet without an Ethernet header,
+    which is appropriate for a point-to-point WireGuard interface. The systemd unit
+    grants only CAP_NET_RAW; CAP_NET_ADMIN is intentionally not required.
+    """
+    if not hasattr(socket, "AF_PACKET"):
+        raise PublisherError("AF_PACKET unavailable on this platform")
+    proto = socket.htons(ETH_P_IP)
+    s = socket.socket(socket.AF_PACKET, socket.SOCK_DGRAM, proto)
+    try:
+        s.bind((interface, proto))
+    except Exception:
+        s.close()
+        raise
+    return s
 
 
 def publish_once(interface: str, worker_socket: str, camera_id: str) -> None:
-    # Open capture first so a broken capture path cannot create a misleading
-    # short-lived registration in the GodSees worker.
-    proc = start_tcpdump(interface)
-    assert proc.stdout is not None
+    capture = open_capture(interface)
     worker: Optional[socket.socket] = None
     filt = AuthorizedMediaFilter()
     last_report = time.monotonic()
     try:
         worker = connect_worker(worker_socket, camera_id)
-        print(json.dumps({"event": "publisher_registered", "camera_id": camera_id, "interface": interface}, sort_keys=True), flush=True)
-        for linktype, frame in iter_pcap(proc.stdout):
-            parsed = udp_payload(frame, linktype)
+        print(
+            json.dumps(
+                {
+                    "event": "publisher_registered",
+                    "camera_id": camera_id,
+                    "interface": interface,
+                    "capture": "af_packet_sock_dgram",
+                },
+                sort_keys=True,
+            ),
+            flush=True,
+        )
+        while True:
+            ip = capture.recv(65535)
+            parsed = ipv4_udp_payload(ip)
             if not parsed:
                 continue
             flow, payload = parsed
+            if flow[1] != 80 and flow[3] != 80:
+                continue
             if not filt.accept(flow, payload):
                 continue
             send_frame(worker, payload)
             now = time.monotonic()
             if now - last_report >= 30:
-                print(json.dumps({"event": "publisher_stats", "forwarded": filt.forwarded, "ignored": filt.ignored}, sort_keys=True), flush=True)
+                print(
+                    json.dumps(
+                        {
+                            "event": "publisher_stats",
+                            "forwarded": filt.forwarded,
+                            "ignored": filt.ignored,
+                        },
+                        sort_keys=True,
+                    ),
+                    flush=True,
+                )
                 last_report = now
-        rc = proc.wait(timeout=2)
-        detail = ""
-        if proc.stderr is not None:
-            try:
-                detail = proc.stderr.read(4096).decode(errors="replace").strip()
-            except Exception:
-                pass
-        raise PublisherError(f"tcpdump exited rc={rc}: {detail[:300]}")
     finally:
         if worker is not None:
             worker.close()
-        if proc.poll() is None:
-            proc.terminate()
-            try:
-                proc.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                proc.kill()
+        capture.close()
 
 
 def self_test() -> None:
@@ -268,9 +219,10 @@ def self_test() -> None:
     ip[12:16] = socket.inet_aton("180.153.233.178")
     ip[16:20] = socket.inet_aton("10.77.0.2")
     udp = struct.pack("!HHHH", 80, 58600, udp_len, 0) + bytes(media)
-    parsed = udp_payload(bytes(ip) + udp, 101)
+    parsed = ipv4_udp_payload(bytes(ip) + udp)
     assert parsed is not None
     flow, payload = parsed
+    assert flow[1] == 80
     filt = AuthorizedMediaFilter()
     assert filt.accept(flow, payload)
     cont = bytearray(10 + 8)
@@ -301,7 +253,18 @@ def main() -> int:
         except KeyboardInterrupt:
             return 130
         except Exception as exc:
-            print(json.dumps({"event": "publisher_restart", "error": type(exc).__name__, "detail": str(exc)[:400]}, sort_keys=True), file=sys.stderr, flush=True)
+            print(
+                json.dumps(
+                    {
+                        "event": "publisher_restart",
+                        "error": type(exc).__name__,
+                        "detail": str(exc)[:400],
+                    },
+                    sort_keys=True,
+                ),
+                file=sys.stderr,
+                flush=True,
+            )
             time.sleep(3)
 
 
