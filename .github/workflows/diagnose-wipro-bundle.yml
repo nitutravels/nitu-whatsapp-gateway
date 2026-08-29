@@ -1,0 +1,37 @@
+name: Diagnose Wipro bundle publication
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/diagnose-wipro-bundle.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Reconstruct and report exact bundle
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cd deploy/wipro-mcp
+          printf 'PARTS_BEGIN\n'
+          for f in bundle.part.*; do printf '%s bytes=%s sha=%s\n' "$f" "$(wc -c < "$f")" "$(sha256sum "$f" | cut -d' ' -f1)"; done
+          printf 'PARTS_END\n'
+          cat bundle.part.* > /tmp/nitu-mcp-bundle.b64
+          base64 -d /tmp/nitu-mcp-bundle.b64 > /tmp/nitu-mcp-bundle.zip
+          actual="$(sha256sum /tmp/nitu-mcp-bundle.zip | cut -d' ' -f1)"
+          expected="$(tr -d '[:space:]' < BUNDLE.sha256)"
+          echo "WIPRO_BUNDLE_EXPECTED_SHA=$expected"
+          echo "WIPRO_BUNDLE_ACTUAL_SHA=$actual"
+          echo "WIPRO_BUNDLE_ZIP_BYTES=$(wc -c < /tmp/nitu-mcp-bundle.zip)"
+          unzip -t /tmp/nitu-mcp-bundle.zip
+          unzip -l /tmp/nitu-mcp-bundle.zip
+          if [ "$actual" = "$expected" ]; then echo WIPRO_BUNDLE_PUBLICATION_HASH_PASS; else echo WIPRO_BUNDLE_PUBLICATION_HASH_MISMATCH; fi
