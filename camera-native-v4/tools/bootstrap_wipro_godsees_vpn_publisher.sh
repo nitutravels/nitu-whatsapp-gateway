@@ -17,6 +17,9 @@ ROOT=/opt/nitu-camera-v3
 PIN=5bd2f57cb57b723bdab1ebae3ec6d2eea36693bc
 REPO=https://github.com/nitutravels/nitu-whatsapp-gateway.git
 [ -d "$ROOT" ] || { echo "Camera V3 is not installed at $ROOT" >&2; exit 2; }
+if [ ! -S /run/nitu-camera/godsees.sock ] && [ -x /usr/local/sbin/nitu-camera-deploy-v5 ]; then
+  /usr/local/sbin/nitu-camera-deploy-v5
+fi
 [ -S /run/nitu-camera/godsees.sock ] || { echo "GodSees V5 worker is not active" >&2; exit 2; }
 TMP=$(/usr/bin/mktemp -d /root/nitu-camera-v6-deploy.XXXXXX)
 cleanup(){ /bin/rm -rf "$TMP"; }
