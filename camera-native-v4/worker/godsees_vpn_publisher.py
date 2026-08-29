@@ -22,7 +22,7 @@ from typing import Optional
 
 DEFAULT_WORKER_SOCKET = "/run/nitu-camera/godsees.sock"
 DEFAULT_INTERFACE = "nitu360"
-DEFAULT_STATUS = "/run/nitu-camera-godsees-vpn-publisher.status.json"
+DEFAULT_STATUS = "/run/nitu-camera-publisher/status.json"
 MAX_FRAME = 8 * 1024 * 1024
 RECORD_MAGIC = b"\x20\x14\x11\x04"
 MEDIA_MARKERS = {b"\x1d\x00", b"\x1d\x02"}
