@@ -10,6 +10,7 @@ import time
 
 ROOT = pathlib.Path('/opt/nitu-camera-v3')
 SOCK = '/run/nitu-camera/godsees.sock'
+STATUS = pathlib.Path('/run/nitu-camera-godsees-vpn-publisher.status.json')
 
 
 def request(obj: dict) -> dict:
@@ -36,6 +37,13 @@ def active(unit: str) -> None:
     subprocess.run(['systemctl', 'is-active', '--quiet', unit], check=True)
 
 
+def runtime_status() -> dict | None:
+    try:
+        return json.loads(STATUS.read_text(encoding='utf-8'))
+    except Exception:
+        return None
+
+
 def publisher_health(timeout: float = 20.0) -> dict:
     deadline = time.monotonic() + timeout
     last = None
@@ -47,9 +55,14 @@ def publisher_health(timeout: float = 20.0) -> dict:
         except Exception:
             pass
         time.sleep(0.5)
+    status = runtime_status()
     if last is None:
-        raise SystemExit('GodSees worker health unavailable while waiting for VPN publisher')
-    raise SystemExit(f"VPN publisher did not register within {timeout:.0f}s; worker health={json.dumps(last, sort_keys=True)}")
+        raise SystemExit(f'GodSees worker health unavailable while waiting for VPN publisher; runtime_status={json.dumps(status, sort_keys=True)}')
+    raise SystemExit(
+        f"VPN publisher did not register within {timeout:.0f}s; "
+        f"worker health={json.dumps(last, sort_keys=True)}; "
+        f"runtime_status={json.dumps(status, sort_keys=True)}"
+    )
 
 
 def main() -> int:
@@ -64,6 +77,10 @@ def main() -> int:
     caps = health.get('capabilities') or {}
     if not caps.get('publisher_ingest') or not caps.get('fastconnect_media_demux'):
         raise SystemExit('GodSees worker publisher/media capabilities missing')
+
+    status = runtime_status()
+    if not status or status.get('event') not in {'publisher_registered', 'publisher_stats'}:
+        raise SystemExit(f'publisher runtime status not registered: {json.dumps(status, sort_keys=True)}')
 
     for p in (
         ROOT / 'godsees-worker/godsees_vpn_publisher.py',
@@ -80,6 +97,7 @@ def main() -> int:
         'worker_publishers': health.get('publishers'),
         'publisher_ingest': caps.get('publisher_ingest'),
         'fastconnect_media_demux': caps.get('fastconnect_media_demux'),
+        'publisher_runtime': status,
         'android_profile_ready': True,
         'live_media_waiting_for_phone_tunnel': True,
     }, sort_keys=True))
