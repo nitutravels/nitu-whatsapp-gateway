@@ -1,36 +1,42 @@
-# Nitu MCP v0.2.2 — Wipro Debian GitHub Control
+# Nitu MCP Control Plane v0.2.3 — Wipro Debian / GitHub Control
 
-This directory publishes the verified Nitu MCP Control Plane bundle for the Wipro Debian server.
+This is the Wipro Debian commissioning build of the Nitu-owned MCP gateway.
 
-## Safety model
+Critical v0.2.3 repair:
+- Fixes the failed v0.2.2 Wipro bootstrap seen in the Termux recording.
+- Root cause: `gateway.py` imported nonexistent `httpx2`; the service crashed before port 8780 could open.
+- `httpx==0.28.1` is now explicit and the staged venv must successfully `import gateway` before any mutation begins.
+- GitHub Actions also performs a real dependency install + gateway runtime import.
 
-- GitHub stores the release as deterministic base64 chunks plus an independent decoded-ZIP SHA-256.
-- Wipro concatenates and decodes the chunks, verifies `BUNDLE.sha256`, rejects unsafe ZIP paths/symlinks, verifies the bundle's internal `SHA256SUMS.txt`, and runs `validate_package.py` before deployment.
-- The gateway binds to `127.0.0.1:8780` only and exposes a read-only tool catalog.
-- Dynamic MCP registration, arbitrary SQL, WAHA send/admin, Playwright unsafe JavaScript, generic OCI invoke, and model-selected upstream URLs are denied.
-- Any active LiteLLM must be verifiably >= 1.84.0.
-- An unexpected child process under the MCP gateway causes the gateway to stop and records a security alert.
-- Existing listeners and firewall state are compared before/after deployment; post-mutation failure triggers rollback.
+Changes from v0.2.1:
+- Debian-aware preflight and resource gates.
+- GitHub desired-state control from `nitutravels/nitu-whatsapp-gateway` → `deploy/wipro-mcp`.
+- 15-minute manifest-verified update timer.
+- Active LiteLLM gate: any active LiteLLM must be verifiably >= 1.84.0.
+- Unexpected child-process guard: stop the gateway and alert if it spawns a child.
+- Stronger systemd sandboxing with 768 MiB memory and 128-task caps.
+- Existing listeners/firewall are checked before and after deployment.
+- WAHA, Fleet, Google Ads, MySQL and OCI upstreams remain disabled until separately commissioned.
 
-## One-time bootstrap on Wipro Debian
+First Wipro install after the GitHub release folder is merged to main:
 
 ```bash
 sudo apt-get update && sudo apt-get install -y git unzip ca-certificates python3 && \
-rm -rf /tmp/nitu-mcp-bootstrap /tmp/nitu-mcp-package /tmp/nitu-mcp-bundle.* && \
+rm -rf /tmp/nitu-mcp-bootstrap && \
 git clone --depth=1 https://github.com/nitutravels/nitu-whatsapp-gateway.git /tmp/nitu-mcp-bootstrap && \
 cd /tmp/nitu-mcp-bootstrap/deploy/wipro-mcp && \
 cat bundle.part.* > /tmp/nitu-mcp-bundle.b64 && \
 base64 -d /tmp/nitu-mcp-bundle.b64 > /tmp/nitu-mcp-bundle.zip && \
 echo "$(cat BUNDLE.sha256)  /tmp/nitu-mcp-bundle.zip" | sha256sum -c - && \
-mkdir /tmp/nitu-mcp-package && unzip -q /tmp/nitu-mcp-bundle.zip -d /tmp/nitu-mcp-package && \
-cd /tmp/nitu-mcp-package && sha256sum -c SHA256SUMS.txt && \
-python3 validate_package.py && sudo bash bootstrap_wipro.sh
+rm -rf /tmp/nitu-mcp-package && mkdir /tmp/nitu-mcp-package && \
+unzip -q /tmp/nitu-mcp-bundle.zip -d /tmp/nitu-mcp-package && \
+cd /tmp/nitu-mcp-package && \
+sha256sum -c SHA256SUMS.txt && \
+python3 validate_package.py && \
+sudo bash bootstrap_wipro.sh
 ```
 
-After bootstrap, `nitu-mcp-github-sync.timer` checks GitHub about every 15 minutes and only deploys when the verified bundle hash changes. Change `AUTO_DEPLOY` to `HOLD` to freeze GitHub-driven updates without stopping the currently running gateway.
-
-## Verify on Wipro
-
+Verify:
 ```bash
 sudo systemctl status nitu-mcp-gateway --no-pager
 sudo nitu-mcp-verify --require-pass
@@ -39,4 +45,5 @@ sudo systemctl list-timers 'nitu-mcp-*'
 curl -fsS http://127.0.0.1:8780/healthz
 ```
 
-Expected first-install success markers include `NITU_MCP_WIPRO_V0_2_2_DEPLOY_PASS` and `NITU_MCP_WIPRO_GITHUB_CONTROL_BOOTSTRAP_PASS`.
+Future GitHub updates are pulled by `nitu-mcp-github-sync.timer`.
+Set `AUTO_DEPLOY` to `HOLD` in GitHub to freeze automatic deployment while keeping the current gateway running.
