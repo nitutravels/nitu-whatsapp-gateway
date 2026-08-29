@@ -1,0 +1,66 @@
+name: Deploy Nitu Camera Decoder V4 to Wipro
+run-name: Camera V4 Wipro deploy ${{ github.run_number }}
+
+on:
+  push:
+    branches: [camera-native-v4-deploy]
+    paths:
+      - 'camera-native-v4/**'
+      - '.github/workflows/deploy-wipro-v4.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nitu-camera-wipro-v4
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 20
+    steps:
+      - name: Checkout isolated decoder branch
+        uses: actions/checkout@v4
+
+      - name: Verify this is the Wipro V3 host
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          echo "host=$(hostname) arch=$(uname -m)"
+          test "$(uname -s)" = Linux
+          test "$(uname -m)" = x86_64
+          test -d /opt/nitu-camera-v3
+          test -x /opt/nitu-camera-v3/venv/bin/python
+          command -v nitu-camera >/dev/null
+          sudo -n true
+
+      - name: Pre-install decoder self-test
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          /opt/nitu-camera-v3/venv/bin/python camera-native-v4/tools/selftest_decoder_v4.py
+          /opt/nitu-camera-v3/venv/bin/python -m py_compile \
+            camera-native-v4/gateway/plugins/v380_native.py \
+            camera-native-v4/gateway/plugins/camera360_godsees.py \
+            camera-native-v4/gateway/adapters/v380.py \
+            camera-native-v4/gateway/adapters/camera360.py
+
+      - name: Install decoder upgrade with rollback
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo -n bash camera-native-v4/tools/install_decoder_v4.sh "$PWD/camera-native-v4"
+          printf '%s\n' "$GITHUB_SHA" | sudo -n tee /opt/nitu-camera-v3/DECODER_V4_DEPLOYED_SHA >/dev/null
+
+      - name: Verify deployed services
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo -n systemctl is-active --quiet nitu-camera-gateway
+          sudo -n nitu-camera health
+          test -f /opt/nitu-camera-v3/gateway/plugins/v380_native.py
+          test -f /opt/nitu-camera-v3/gateway/plugins/camera360_godsees.py
+          grep -q V380NativePlugin /opt/nitu-camera-v3/gateway/plugins/v380_native.py
+          echo "Camera decoder V4 deployment complete: $GITHUB_SHA"
