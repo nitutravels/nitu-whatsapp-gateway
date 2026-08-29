@@ -13,6 +13,7 @@ set -Eeuo pipefail
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export HOME=/root
 umask 077
+HELPER_REV=2
 ROOT=/opt/nitu-camera-v3
 PIN=2f9c5137de9abd35f645da6e9cf8da705c21f2dc
 REPO=https://github.com/nitutravels/nitu-whatsapp-gateway.git
@@ -34,11 +35,16 @@ SRC="$TMP/src/camera-native-v4"
 "$ROOT/venv/bin/python" -m py_compile "$SRC/worker/godsees_vpn_publisher.py" "$SRC/tools/verify_godsees_vpn_publisher.py"
 "$ROOT/venv/bin/python" "$SRC/worker/godsees_vpn_publisher.py" --self-test
 /bin/bash "$SRC/tools/install_godsees_vpn_publisher.sh" "$SRC"
+# enable --now does not restart an already-active service after its Python file is
+# replaced. Force a restart so the AF_PACKET implementation is actually loaded.
+/bin/systemctl restart nitu-camera-godsees-vpn-publisher.service
+/bin/sleep 2
+/bin/systemctl is-active --quiet nitu-camera-godsees-vpn-publisher.service
 "$ROOT/venv/bin/python" "$SRC/tools/verify_godsees_vpn_publisher.py"
 printf '%s\n' "$PIN" > "$ROOT/GODSEES_VPN_PUBLISHER_V6_DEPLOYED_SHA"
 /bin/chown root:root "$ROOT/GODSEES_VPN_PUBLISHER_V6_DEPLOYED_SHA"
 /bin/chmod 0644 "$ROOT/GODSEES_VPN_PUBLISHER_V6_DEPLOYED_SHA"
-printf '%s\n' "Pinned Camera360 VPN publisher deployed: $PIN"
+printf '%s\n' "Pinned Camera360 VPN publisher deployed: $PIN helper_rev=$HELPER_REV"
 EOF
 /bin/chown root:root "$HELPER"
 /bin/chmod 0755 "$HELPER"
@@ -54,4 +60,5 @@ EOF
 printf '%s\n' \
   "Nitu Camera360 VPN publisher V6 deployment hook installed." \
   "Allowed command: sudo -n $HELPER" \
+  "Helper revision: 2 (forced runtime restart)" \
   "No blanket passwordless sudo was granted."
