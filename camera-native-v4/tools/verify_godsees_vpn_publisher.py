@@ -2,12 +2,11 @@
 from __future__ import annotations
 
 import json
-import os
 import pathlib
 import socket
 import struct
 import subprocess
-import sys
+import time
 
 ROOT = pathlib.Path('/opt/nitu-camera-v3')
 SOCK = '/run/nitu-camera/godsees.sock'
@@ -37,6 +36,22 @@ def active(unit: str) -> None:
     subprocess.run(['systemctl', 'is-active', '--quiet', unit], check=True)
 
 
+def publisher_health(timeout: float = 20.0) -> dict:
+    deadline = time.monotonic() + timeout
+    last = None
+    while time.monotonic() < deadline:
+        try:
+            last = request({'op': 'health'})
+            if last.get('ok') and int(last.get('publishers') or 0) >= 1:
+                return last
+        except Exception:
+            pass
+        time.sleep(0.5)
+    if last is None:
+        raise SystemExit('GodSees worker health unavailable while waiting for VPN publisher')
+    raise SystemExit(f"VPN publisher did not register within {timeout:.0f}s; worker health={json.dumps(last, sort_keys=True)}")
+
+
 def main() -> int:
     active('nitu-camera-godsees.service')
     active('nitu-camera-godsees-vpn-publisher.service')
@@ -44,22 +59,22 @@ def main() -> int:
     active('nitu-camera-gateway.service')
     if not pathlib.Path(SOCK).is_socket():
         raise SystemExit('GodSees Unix socket missing')
-    health = request({'op': 'health'})
-    if not health.get('ok'):
-        raise SystemExit('GodSees worker health failed')
+
+    health = publisher_health()
     caps = health.get('capabilities') or {}
     if not caps.get('publisher_ingest') or not caps.get('fastconnect_media_demux'):
         raise SystemExit('GodSees worker publisher/media capabilities missing')
-    if int(health.get('publishers') or 0) < 1:
-        raise SystemExit('VPN publisher is not registered with GodSees worker')
+
     for p in (
         ROOT / 'godsees-worker/godsees_vpn_publisher.py',
         pathlib.Path('/etc/wireguard/nitu360.conf'),
         pathlib.Path('/home/nituadmin/camera360-wireguard.conf'),
         pathlib.Path('/home/nituadmin/camera360-wireguard-README.txt'),
+        pathlib.Path('/home/nituadmin/camera360-wireguard.png'),
     ):
         if not p.exists():
             raise SystemExit(f'missing installed artifact: {p}')
+
     print(json.dumps({
         'ok': True,
         'worker_publishers': health.get('publishers'),
