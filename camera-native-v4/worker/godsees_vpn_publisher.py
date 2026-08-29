@@ -22,15 +22,38 @@ from typing import Optional
 
 DEFAULT_WORKER_SOCKET = "/run/nitu-camera/godsees.sock"
 DEFAULT_INTERFACE = "nitu360"
+DEFAULT_STATUS = "/run/nitu-camera-godsees-vpn-publisher.status.json"
 MAX_FRAME = 8 * 1024 * 1024
 RECORD_MAGIC = b"\x20\x14\x11\x04"
 MEDIA_MARKERS = {b"\x1d\x00", b"\x1d\x02"}
 MEDIA_TYPES = {2, 3, 4}
-ETH_P_IP = 0x0800
+ETH_P_ALL_FALLBACK = 0x0003
 
 
 class PublisherError(RuntimeError):
     pass
+
+
+def write_status(event: str, **fields: object) -> None:
+    path = os.getenv("GODSEES_PUBLISHER_STATUS", DEFAULT_STATUS)
+    payload = {
+        "event": event,
+        "pid": os.getpid(),
+        "time": int(time.time()),
+        **fields,
+    }
+    tmp = f"{path}.{os.getpid()}.tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f, sort_keys=True, separators=(",", ":"))
+            f.write("\n")
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
 
 
 def send_frame(sock: socket.socket, data: bytes) -> None:
@@ -134,18 +157,21 @@ class AuthorizedMediaFilter:
 
 
 def open_capture(interface: str) -> socket.socket:
-    """Open a non-promiscuous L3 packet socket on the dedicated WireGuard link.
+    """Open non-promiscuous cooked capture on the dedicated WireGuard interface.
 
-    AF_PACKET/SOCK_DGRAM returns the network-layer packet without an Ethernet header,
-    which is appropriate for a point-to-point WireGuard interface. The systemd unit
-    grants only CAP_NET_RAW; CAP_NET_ADMIN is intentionally not required.
+    Linux packet sockets take the protocol at socket creation. Binding with protocol
+    zero then constrains only the interface while retaining the constructor protocol;
+    this matches libpcap's cooked-capture pattern and avoids a second protocol-byte-
+    order conversion in Python's AF_PACKET address tuple.
     """
     if not hasattr(socket, "AF_PACKET"):
         raise PublisherError("AF_PACKET unavailable on this platform")
-    proto = socket.htons(ETH_P_IP)
+    eth_p_all = int(getattr(socket, "ETH_P_ALL", ETH_P_ALL_FALLBACK))
+    proto = socket.htons(eth_p_all)
     s = socket.socket(socket.AF_PACKET, socket.SOCK_DGRAM, proto)
     try:
-        s.bind((interface, proto))
+        s.bind((interface, 0))
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)
     except Exception:
         s.close()
         raise
@@ -153,12 +179,15 @@ def open_capture(interface: str) -> socket.socket:
 
 
 def publish_once(interface: str, worker_socket: str, camera_id: str) -> None:
+    write_status("starting", interface=interface, camera_id=camera_id)
     capture = open_capture(interface)
+    write_status("capture_open", interface=interface, camera_id=camera_id, capture="af_packet_sock_dgram")
     worker: Optional[socket.socket] = None
     filt = AuthorizedMediaFilter()
     last_report = time.monotonic()
     try:
         worker = connect_worker(worker_socket, camera_id)
+        write_status("publisher_registered", interface=interface, camera_id=camera_id, capture="af_packet_sock_dgram")
         print(
             json.dumps(
                 {
@@ -184,17 +213,14 @@ def publish_once(interface: str, worker_socket: str, camera_id: str) -> None:
             send_frame(worker, payload)
             now = time.monotonic()
             if now - last_report >= 30:
-                print(
-                    json.dumps(
-                        {
-                            "event": "publisher_stats",
-                            "forwarded": filt.forwarded,
-                            "ignored": filt.ignored,
-                        },
-                        sort_keys=True,
-                    ),
-                    flush=True,
-                )
+                status = {
+                    "forwarded": filt.forwarded,
+                    "ignored": filt.ignored,
+                    "interface": interface,
+                    "camera_id": camera_id,
+                }
+                write_status("publisher_stats", **status)
+                print(json.dumps({"event": "publisher_stats", **status}, sort_keys=True), flush=True)
                 last_report = now
     finally:
         if worker is not None:
@@ -253,12 +279,14 @@ def main() -> int:
         except KeyboardInterrupt:
             return 130
         except Exception as exc:
+            detail = str(exc)[:400]
+            write_status("publisher_restart", error=type(exc).__name__, detail=detail, interface=args.interface, camera_id=args.camera_id)
             print(
                 json.dumps(
                     {
                         "event": "publisher_restart",
                         "error": type(exc).__name__,
-                        "detail": str(exc)[:400],
+                        "detail": detail,
                     },
                     sort_keys=True,
                 ),
