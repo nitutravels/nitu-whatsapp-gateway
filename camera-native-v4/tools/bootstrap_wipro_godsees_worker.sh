@@ -28,6 +28,31 @@ ACTUAL=$(/usr/bin/git -C "$TMP/src" rev-parse HEAD)
 SRC="$TMP/src/camera-native-v4"
 "$ROOT/venv/bin/python" "$SRC/tools/selftest_godsees_worker.py"
 /bin/bash "$SRC/tools/install_godsees_worker.sh" "$SRC"
+"$ROOT/venv/bin/python" - <<'PY'
+import asyncio, json, struct
+SOCK='/run/nitu-camera/godsees.sock'
+async def rf(r):
+    n=struct.unpack('!I', await r.readexactly(4))[0]
+    return await r.readexactly(n)
+async def sj(w,o):
+    b=json.dumps(o,separators=(',',':')).encode()
+    w.write(struct.pack('!I',len(b))+b)
+    await w.drain()
+async def main():
+    r,w=await asyncio.open_unix_connection(SOCK)
+    await sj(w,{'op':'health'})
+    h=json.loads((await rf(r)).decode())
+    assert h.get('ok') is True
+    w.close(); await w.wait_closed()
+    r,w=await asyncio.open_unix_connection(SOCK)
+    await sj(w,{'op':'live','camera_id':'security-test','serial_number':'authorized-test',
+                'business_token':'','stream_keys':{},'relay_sign':None})
+    d=json.loads((await rf(r)).decode())
+    assert d.get('ok') is False and d.get('error') == 'AUTHORIZED_SESSION_MATERIAL_MISSING'
+    w.close(); await w.wait_closed()
+    print('GodSees worker health/fail-closed verification: PASS')
+asyncio.run(main())
+PY
 printf '%s\n' "$PIN" > "$ROOT/GODSEES_WORKER_V5_DEPLOYED_SHA"
 /bin/chown root:root "$ROOT/GODSEES_WORKER_V5_DEPLOYED_SHA"
 /bin/chmod 0644 "$ROOT/GODSEES_WORKER_V5_DEPLOYED_SHA"
