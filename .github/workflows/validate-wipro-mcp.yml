@@ -1,0 +1,72 @@
+name: Validate Wipro MCP bundle
+
+on:
+  pull_request:
+    paths:
+      - 'deploy/wipro-mcp/**'
+      - '.github/workflows/validate-wipro-mcp.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'deploy/wipro-mcp/**'
+      - '.github/workflows/validate-wipro-mcp.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 hardened backport
+        with:
+          persist-credentials: false
+
+      - name: Reconstruct and verify outer bundle
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cd deploy/wipro-mcp
+          test "$(cat AUTO_DEPLOY)" = "ENABLED"
+          cat bundle.part.* > /tmp/nitu-mcp-bundle.b64
+          base64 -d /tmp/nitu-mcp-bundle.b64 > /tmp/nitu-mcp-bundle.zip
+          echo "$(tr -d '[:space:]' < BUNDLE.sha256)  /tmp/nitu-mcp-bundle.zip" | sha256sum -c -
+
+      - name: Reject unsafe ZIP entries and extract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf /tmp/nitu-mcp-package
+          mkdir /tmp/nitu-mcp-package
+          python3 - <<'PY'
+          import pathlib, zipfile
+          zpath='/tmp/nitu-mcp-bundle.zip'
+          dest='/tmp/nitu-mcp-package'
+          with zipfile.ZipFile(zpath) as z:
+              for i in z.infolist():
+                  p=pathlib.PurePosixPath(i.filename)
+                  if p.is_absolute() or '..' in p.parts:
+                      raise SystemExit(f'unsafe ZIP path: {i.filename}')
+                  mode=(i.external_attr >> 16) & 0o170000
+                  if mode == 0o120000:
+                      raise SystemExit(f'ZIP symlink refused: {i.filename}')
+              bad=z.testzip()
+              if bad:
+                  raise SystemExit(f'ZIP CRC failure: {bad}')
+              z.extractall(dest)
+          PY
+          test -z "$(find /tmp/nitu-mcp-package -type l -print -quit)"
+
+      - name: Verify inner manifest and policy
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cd /tmp/nitu-mcp-package
+          sha256sum -c SHA256SUMS.txt
+          python3 validate_package.py
+          bash -n deploy_local.sh
+          bash -n bootstrap_wipro.sh
+          bash -n nitu-mcp-github-sync
+          bash -n nitu-mcp-spawn-watch
