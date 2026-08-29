@@ -70,3 +70,23 @@ jobs:
           bash -n bootstrap_wipro.sh
           bash -n nitu-mcp-github-sync
           bash -n nitu-mcp-spawn-watch
+
+      - name: Install pinned runtime and import real gateway
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cd /tmp/nitu-mcp-package
+          python3 -m venv /tmp/nitu-mcp-ci-venv
+          /tmp/nitu-mcp-ci-venv/bin/pip install --disable-pip-version-check --no-input -r requirements.txt
+          /tmp/nitu-mcp-ci-venv/bin/pip check
+          NITU_MCP_ETC=/tmp/nitu-mcp-package \
+          NITU_MCP_STATE=/tmp/nitu-mcp-ci-state \
+          /tmp/nitu-mcp-ci-venv/bin/python - <<'PY'
+          import importlib.metadata as m
+          import gateway
+          assert gateway.VERSION == '0.2.3'
+          assert m.version('mcp') == '2.0.0'
+          assert m.version('uvicorn') == '0.35.0'
+          assert m.version('httpx') == '0.28.1'
+          print('GITHUB_CI_GATEWAY_REAL_RUNTIME_IMPORT_PASS')
+          PY
