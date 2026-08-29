@@ -13,10 +13,11 @@ set -Eeuo pipefail
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export HOME=/root
 umask 077
-HELPER_REV=2
+HELPER_REV=3
 ROOT=/opt/nitu-camera-v3
-PIN=2f9c5137de9abd35f645da6e9cf8da705c21f2dc
+PIN=e840e7fbe6fd85131ea8ddd24af24d593bf81ee6
 REPO=https://github.com/nitutravels/nitu-whatsapp-gateway.git
+STATUS=/run/nitu-camera-godsees-vpn-publisher.status.json
 [ -d "$ROOT" ] || { echo "Camera V3 is not installed at $ROOT" >&2; exit 2; }
 if [ ! -S /run/nitu-camera/godsees.sock ] && [ -x /usr/local/sbin/nitu-camera-deploy-v5 ]; then
   /usr/local/sbin/nitu-camera-deploy-v5
@@ -34,9 +35,8 @@ SRC="$TMP/src/camera-native-v4"
 /bin/bash -n "$SRC/tools/install_godsees_vpn_publisher.sh"
 "$ROOT/venv/bin/python" -m py_compile "$SRC/worker/godsees_vpn_publisher.py" "$SRC/tools/verify_godsees_vpn_publisher.py"
 "$ROOT/venv/bin/python" "$SRC/worker/godsees_vpn_publisher.py" --self-test
+/bin/rm -f "$STATUS"
 /bin/bash "$SRC/tools/install_godsees_vpn_publisher.sh" "$SRC"
-# enable --now does not restart an already-active service after its Python file is
-# replaced. Force a restart so the AF_PACKET implementation is actually loaded.
 /bin/systemctl restart nitu-camera-godsees-vpn-publisher.service
 /bin/sleep 2
 /bin/systemctl is-active --quiet nitu-camera-godsees-vpn-publisher.service
@@ -60,5 +60,5 @@ EOF
 printf '%s\n' \
   "Nitu Camera360 VPN publisher V6 deployment hook installed." \
   "Allowed command: sudo -n $HELPER" \
-  "Helper revision: 2 (forced runtime restart)" \
+  "Helper revision: 3 (AF_PACKET bind fix + runtime status)" \
   "No blanket passwordless sudo was granted."
