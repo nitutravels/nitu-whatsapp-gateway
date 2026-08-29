@@ -14,7 +14,7 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export HOME=/root
 umask 077
 ROOT=/opt/nitu-camera-v3
-PIN=539642c1d60a16b581711bb23c11dd1c81122119
+PIN=5bd2f57cb57b723bdab1ebae3ec6d2eea36693bc
 REPO=https://github.com/nitutravels/nitu-whatsapp-gateway.git
 [ -d "$ROOT" ] || { echo "Camera V3 is not installed at $ROOT" >&2; exit 2; }
 [ -S /run/nitu-camera/godsees.sock ] || { echo "GodSees V5 worker is not active" >&2; exit 2; }
@@ -28,9 +28,10 @@ ACTUAL=$(/usr/bin/git -C "$TMP/src" rev-parse HEAD)
 [ "$ACTUAL" = "$PIN" ] || { echo "Pinned publisher source verification failed" >&2; exit 3; }
 SRC="$TMP/src/camera-native-v4"
 /bin/bash -n "$SRC/tools/install_godsees_vpn_publisher.sh"
-"$ROOT/venv/bin/python" -m py_compile "$SRC/worker/godsees_vpn_publisher.py"
+"$ROOT/venv/bin/python" -m py_compile "$SRC/worker/godsees_vpn_publisher.py" "$SRC/tools/verify_godsees_vpn_publisher.py"
 "$ROOT/venv/bin/python" "$SRC/worker/godsees_vpn_publisher.py" --self-test
 /bin/bash "$SRC/tools/install_godsees_vpn_publisher.sh" "$SRC"
+"$ROOT/venv/bin/python" "$SRC/tools/verify_godsees_vpn_publisher.py"
 printf '%s\n' "$PIN" > "$ROOT/GODSEES_VPN_PUBLISHER_V6_DEPLOYED_SHA"
 /bin/chown root:root "$ROOT/GODSEES_VPN_PUBLISHER_V6_DEPLOYED_SHA"
 /bin/chmod 0644 "$ROOT/GODSEES_VPN_PUBLISHER_V6_DEPLOYED_SHA"
