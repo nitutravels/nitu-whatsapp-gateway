@@ -1,0 +1,105 @@
+name: Deploy Wipro MCP v0.2.4
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'deploy/wipro-mcp/**'
+      - '.github/workflows/deploy-wipro-mcp.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wipro-mcp-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, linux, wipro]
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact repository state
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 hardened backport
+        with:
+          persist-credentials: false
+
+      - name: Verify Wipro execution environment
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -r /etc/os-release
+          . /etc/os-release
+          test "$ID" = debian
+          sudo -n true
+          command -v python3
+          command -v base64
+          command -v sha256sum
+          command -v systemctl
+          echo "WIPRO_RUNNER_ENVIRONMENT_PASS host=$(hostname) arch=$(uname -m)"
+
+      - name: Reconstruct and verify v0.2.4 bundle
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cd deploy/wipro-mcp
+          test "$(cat VERSION)" = "0.2.4"
+          test "$(cat AUTO_DEPLOY)" = "ENABLED"
+          cat bundle.part.* > /tmp/nitu-mcp-v024.b64
+          base64 -d /tmp/nitu-mcp-v024.b64 > /tmp/nitu-mcp-v024.zip
+          echo "$(tr -d '[:space:]' < BUNDLE.sha256)  /tmp/nitu-mcp-v024.zip" | sha256sum -c -
+          echo WIPRO_V024_OUTER_BUNDLE_PASS
+
+      - name: Safely extract and verify inner package
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf /tmp/nitu-mcp-v024
+          mkdir /tmp/nitu-mcp-v024
+          python3 - <<'PY'
+          import pathlib, zipfile
+          zpath='/tmp/nitu-mcp-v024.zip'
+          dest='/tmp/nitu-mcp-v024'
+          with zipfile.ZipFile(zpath) as z:
+              for i in z.infolist():
+                  p=pathlib.PurePosixPath(i.filename)
+                  if p.is_absolute() or '..' in p.parts:
+                      raise SystemExit(f'unsafe ZIP path: {i.filename}')
+                  if ((i.external_attr >> 16) & 0o170000) == 0o120000:
+                      raise SystemExit(f'ZIP symlink refused: {i.filename}')
+              bad=z.testzip()
+              if bad:
+                  raise SystemExit(f'ZIP CRC failure: {bad}')
+              z.extractall(dest)
+          PY
+          test -z "$(find /tmp/nitu-mcp-v024 -type l -print -quit)"
+          cd /tmp/nitu-mcp-v024
+          sha256sum -c SHA256SUMS.txt
+          python3 validate_package.py
+          echo WIPRO_V024_INNER_PACKAGE_PASS
+
+      - name: Deploy Nitu MCP v0.2.4
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cd /tmp/nitu-mcp-v024
+          sudo -n bash bootstrap_wipro.sh
+
+      - name: Verify live Wipro MCP installation
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo -n systemctl is-active --quiet nitu-mcp-gateway.service
+          sudo -n /usr/local/sbin/nitu-mcp-verify --require-pass
+          sudo -n /usr/local/sbin/nitu-mcp-security-audit
+          curl -fsS http://127.0.0.1:8780/healthz | tee /tmp/nitu-mcp-v024-health.json
+          python3 - <<'PY'
+          import json
+          j=json.load(open('/tmp/nitu-mcp-v024-health.json'))
+          assert j.get('ok') is True
+          assert j.get('version') == '0.2.4'
+          assert j.get('mode') == 'read_only'
+          print('WIPRO_MCP_V0_2_4_LIVE_HEALTH_PASS')
+          PY
+          echo NITU_MCP_WIPRO_V0_2_4_GITHUB_RUNNER_DEPLOY_PASS
