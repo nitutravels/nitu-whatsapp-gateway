@@ -111,26 +111,20 @@ def iter_pcap(stream: BinaryIO):
 
 
 def ipv4_from_frame(frame: bytes, linktype: int) -> Optional[bytes]:
-    # DLT_EN10MB
     if linktype == 1:
         if len(frame) < 14 or frame[12:14] != b"\x08\x00":
             return None
         return frame[14:]
-    # DLT_RAW / LINKTYPE_RAW variants
     if linktype in {101, 228}:
         return frame if frame and frame[0] >> 4 == 4 else None
-    # Linux cooked capture v1
     if linktype == 113:
         if len(frame) < 16 or frame[14:16] != b"\x08\x00":
             return None
         return frame[16:]
-    # Linux cooked capture v2
     if linktype == 276:
         if len(frame) < 20 or frame[0:2] != b"\x08\x00":
             return None
         return frame[20:]
-    # Some tunnel interfaces are exposed by libpcap as raw IPv4 regardless of
-    # the advertised link type. Accept that shape defensively.
     if frame and frame[0] >> 4 == 4:
         return frame
     return None
@@ -194,17 +188,38 @@ class AuthorizedMediaFilter:
 
 
 def start_tcpdump(interface: str) -> subprocess.Popen:
-    cmd = ["/usr/bin/tcpdump", "-i", interface, "-nn", "-U", "-s", "0", "-w", "-", "udp", "port", "80"]
-    return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+    # WireGuard does not need promiscuous mode. Keeping capture non-promiscuous
+    # avoids CAP_NET_ADMIN while the hardened systemd unit grants only CAP_NET_RAW.
+    # -Z root prevents tcpdump from trying to switch to the tcpdump account after
+    # the service has already been sandboxed with NoNewPrivileges.
+    cmd = [
+        "/usr/bin/tcpdump", "-i", interface, "-p", "-Z", "root",
+        "-nn", "-U", "-s", "0", "-w", "-", "udp", "port", "80",
+    ]
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+    time.sleep(0.25)
+    if proc.poll() is not None:
+        detail = ""
+        if proc.stderr is not None:
+            try:
+                detail = proc.stderr.read(4096).decode(errors="replace").strip()
+            except Exception:
+                pass
+        raise PublisherError(f"tcpdump failed rc={proc.returncode}: {detail[:300]}")
+    return proc
 
 
 def publish_once(interface: str, worker_socket: str, camera_id: str) -> None:
-    worker = connect_worker(worker_socket, camera_id)
+    # Open capture first so a broken capture path cannot create a misleading
+    # short-lived registration in the GodSees worker.
     proc = start_tcpdump(interface)
     assert proc.stdout is not None
+    worker: Optional[socket.socket] = None
     filt = AuthorizedMediaFilter()
     last_report = time.monotonic()
     try:
+        worker = connect_worker(worker_socket, camera_id)
+        print(json.dumps({"event": "publisher_registered", "camera_id": camera_id, "interface": interface}, sort_keys=True), flush=True)
         for linktype, frame in iter_pcap(proc.stdout):
             parsed = udp_payload(frame, linktype)
             if not parsed:
@@ -218,9 +233,16 @@ def publish_once(interface: str, worker_socket: str, camera_id: str) -> None:
                 print(json.dumps({"event": "publisher_stats", "forwarded": filt.forwarded, "ignored": filt.ignored}, sort_keys=True), flush=True)
                 last_report = now
         rc = proc.wait(timeout=2)
-        raise PublisherError(f"tcpdump exited rc={rc}")
+        detail = ""
+        if proc.stderr is not None:
+            try:
+                detail = proc.stderr.read(4096).decode(errors="replace").strip()
+            except Exception:
+                pass
+        raise PublisherError(f"tcpdump exited rc={rc}: {detail[:300]}")
     finally:
-        worker.close()
+        if worker is not None:
+            worker.close()
         if proc.poll() is None:
             proc.terminate()
             try:
@@ -230,7 +252,6 @@ def publish_once(interface: str, worker_socket: str, camera_id: str) -> None:
 
 
 def self_test() -> None:
-    # Synthetic raw IPv4/UDP packet containing one verified H.264 record start.
     media = bytearray(68 + 12)
     media[6:8] = b"\x1d\x00"
     media[14:18] = RECORD_MAGIC
@@ -254,7 +275,7 @@ def self_test() -> None:
     assert filt.accept(flow, payload)
     cont = bytearray(10 + 8)
     cont[6:8] = b"\x1d\x00"
-    assert filt.accept(flow, bytes(cont)) is False  # start fully consumed declared media
+    assert filt.accept(flow, bytes(cont)) is False
     bad = bytearray(media)
     bad[18:20] = (1).to_bytes(2, "big")
     assert not filt.accept(flow, bytes(bad))
@@ -280,7 +301,7 @@ def main() -> int:
         except KeyboardInterrupt:
             return 130
         except Exception as exc:
-            print(json.dumps({"event": "publisher_restart", "error": type(exc).__name__, "detail": str(exc)[:200]}, sort_keys=True), file=sys.stderr, flush=True)
+            print(json.dumps({"event": "publisher_restart", "error": type(exc).__name__, "detail": str(exc)[:400]}, sort_keys=True), file=sys.stderr, flush=True)
             time.sleep(3)
 
 
