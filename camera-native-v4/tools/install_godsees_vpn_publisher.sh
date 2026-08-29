@@ -15,6 +15,7 @@ WG_CLIENT=10.77.0.2/32
 SECRETS=/etc/nitu-camera/wireguard
 WG_CONF=/etc/wireguard/${WG_IF}.conf
 PUB_ENV=/etc/nitu-camera/godsees-vpn-publisher.env
+PUB_STATUS=/run/nitu-camera-publisher/status.json
 SYSCTL=/etc/sysctl.d/90-nitu-camera360-forward.conf
 CLIENT_HOME=/home/nituadmin
 CLIENT_CONF=$CLIENT_HOME/camera360-wireguard.conf
@@ -141,6 +142,7 @@ cat > "$PUB_ENV" <<EOF
 GODSEES_CAMERA_ID=$CAMERA_ID
 GODSEES_VPN_INTERFACE=$WG_IF
 GODSEES_SOCKET=/run/nitu-camera/godsees.sock
+GODSEES_PUBLISHER_STATUS=$PUB_STATUS
 EOF
 chown root:nitu-camera "$PUB_ENV"
 chmod 0640 "$PUB_ENV"
@@ -153,10 +155,12 @@ After=nitu-camera-godsees.service wg-quick@nitu360.service network-online.target
 
 [Service]
 Type=simple
-User=root
-Group=root
+User=nitu-camera
+Group=nitu-camera
 Environment=PYTHONDONTWRITEBYTECODE=1
 EnvironmentFile=/etc/nitu-camera/godsees-vpn-publisher.env
+RuntimeDirectory=nitu-camera-publisher
+RuntimeDirectoryMode=0755
 ExecStart=/opt/nitu-camera-v3/venv/bin/python /opt/nitu-camera-v3/godsees-worker/godsees_vpn_publisher.py --camera-id ${GODSEES_CAMERA_ID} --interface ${GODSEES_VPN_INTERFACE} --worker-socket ${GODSEES_SOCKET}
 Restart=always
 RestartSec=3
@@ -175,6 +179,7 @@ RestrictRealtime=true
 CapabilityBoundingSet=CAP_NET_RAW
 AmbientCapabilities=CAP_NET_RAW
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_PACKET
+ReadWritePaths=/run/nitu-camera-publisher
 SystemCallArchitectures=native
 
 [Install]
@@ -188,7 +193,9 @@ systemctl enable --now "$WG_SERVICE"
 sleep 1
 ip link show "$WG_IF" >/dev/null
 wg show "$WG_IF" >/dev/null
+rm -f "$PUB_STATUS"
 systemctl enable --now "$PUB_SERVICE"
+systemctl restart "$PUB_SERVICE"
 sleep 2
 systemctl is-active --quiet "$WG_SERVICE"
 systemctl is-active --quiet "$PUB_SERVICE"
@@ -202,6 +209,7 @@ printf '%s\n' \
   "Android profile: $CLIENT_CONF" \
   "Android instructions: $CLIENT_README" \
   "Publisher service: $PUB_SERVICE" \
+  "Publisher identity: nitu-camera + CAP_NET_RAW only" \
   "Camera mapping: $CAMERA_ID" \
   "Security: no Camera360 account password, business token, AK or SK is stored by this publisher." \
   "Activation: import/enable the Android WireGuard profile, then open the legitimate Camera360 live view." \
