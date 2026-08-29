@@ -10,7 +10,7 @@ import time
 
 ROOT = pathlib.Path('/opt/nitu-camera-v3')
 SOCK = '/run/nitu-camera/godsees.sock'
-STATUS = pathlib.Path('/run/nitu-camera-godsees-vpn-publisher.status.json')
+STATUS = pathlib.Path('/run/nitu-camera-publisher/status.json')
 
 
 def request(obj: dict) -> dict:
