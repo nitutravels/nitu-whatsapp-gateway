@@ -13,11 +13,11 @@ set -Eeuo pipefail
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export HOME=/root
 umask 077
-HELPER_REV=3
+HELPER_REV=4
 ROOT=/opt/nitu-camera-v3
-PIN=e840e7fbe6fd85131ea8ddd24af24d593bf81ee6
+PIN=618657a9b813fe198d9e08e3e6503639a14e4d89
 REPO=https://github.com/nitutravels/nitu-whatsapp-gateway.git
-STATUS=/run/nitu-camera-godsees-vpn-publisher.status.json
+STATUS=/run/nitu-camera-publisher/status.json
 [ -d "$ROOT" ] || { echo "Camera V3 is not installed at $ROOT" >&2; exit 2; }
 if [ ! -S /run/nitu-camera/godsees.sock ] && [ -x /usr/local/sbin/nitu-camera-deploy-v5 ]; then
   /usr/local/sbin/nitu-camera-deploy-v5
@@ -60,5 +60,5 @@ EOF
 printf '%s\n' \
   "Nitu Camera360 VPN publisher V6 deployment hook installed." \
   "Allowed command: sudo -n $HELPER" \
-  "Helper revision: 3 (AF_PACKET bind fix + runtime status)" \
+  "Helper revision: 4 (nitu-camera identity + CAP_NET_RAW)" \
   "No blanket passwordless sudo was granted."
