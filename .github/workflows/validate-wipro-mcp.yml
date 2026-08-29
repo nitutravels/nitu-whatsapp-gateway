@@ -17,7 +17,7 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 hardened backport
@@ -59,7 +59,7 @@ jobs:
           PY
           test -z "$(find /tmp/nitu-mcp-package -type l -print -quit)"
 
-      - name: Verify inner manifest and policy
+      - name: Verify inner manifest and static policy
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -70,3 +70,146 @@ jobs:
           bash -n bootstrap_wipro.sh
           bash -n nitu-mcp-github-sync
           bash -n nitu-mcp-spawn-watch
+          systemd-analyze verify nitu-mcp-gateway.service
+
+      - name: Install pinned runtime and boot staged gateway
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cd /tmp/nitu-mcp-package
+          python3 -m venv /tmp/nitu-mcp-ci-venv
+          /tmp/nitu-mcp-ci-venv/bin/pip install --disable-pip-version-check --no-input -r requirements.txt
+          /tmp/nitu-mcp-ci-venv/bin/pip check
+          NITU_MCP_ETC=/tmp/nitu-mcp-package NITU_MCP_STATE=/tmp/nitu-mcp-ci-state \
+            /tmp/nitu-mcp-ci-venv/bin/python - <<'PY'
+          import importlib.metadata as m
+          import gateway
+          assert gateway.VERSION == '0.2.4'
+          assert m.version('mcp') == '2.0.0'
+          assert m.version('uvicorn') == '0.35.0'
+          assert m.version('httpx2') == '2.12.0'
+          print('GITHUB_CI_GATEWAY_REAL_RUNTIME_IMPORT_PASS')
+          PY
+          NITU_MCP_ETC=/tmp/nitu-mcp-package NITU_MCP_STATE=/tmp/nitu-mcp-ci-state \
+            /tmp/nitu-mcp-ci-venv/bin/uvicorn gateway:app --host 127.0.0.1 --port 18780 --workers 1 --no-access-log \
+            >/tmp/nitu-mcp-ci-uvicorn.log 2>&1 &
+          pid=$!
+          trap 'kill $pid 2>/dev/null || true; wait $pid 2>/dev/null || true' EXIT
+          ready=0
+          for i in $(seq 1 20); do
+            if curl -fsS http://127.0.0.1:18780/healthz >/tmp/nitu-mcp-ci-health.json 2>/dev/null; then ready=1; break; fi
+            kill -0 $pid 2>/dev/null || break
+            sleep 0.5
+          done
+          if [ "$ready" != 1 ]; then cat /tmp/nitu-mcp-ci-uvicorn.log >&2; exit 1; fi
+          python3 - <<'PY'
+          import json
+          j=json.load(open('/tmp/nitu-mcp-ci-health.json'))
+          assert j['ok'] is True and j['version']=='0.2.4' and j['mode']=='read_only'
+          print('GITHUB_CI_GATEWAY_UVICORN_HEALTH_PASS')
+          PY
+
+      - name: Boot exact hardened systemd service and negotiate MCP
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cleanup() {
+            sudo systemctl disable --now nitu-mcp-ci.service 2>/dev/null || true
+            sudo rm -f /etc/systemd/system/nitu-mcp-ci.service
+            sudo systemctl daemon-reload || true
+            sudo rm -rf /opt/nitu-mcp-ci /etc/nitu-mcp-ci /var/lib/nitu-mcp-ci /var/log/nitu-mcp-ci
+          }
+          trap cleanup EXIT
+          cleanup
+          sudo useradd --system --home /var/lib/nitu-mcp-ci --shell /usr/sbin/nologin nitu-mcp-ci 2>/dev/null || true
+          sudo install -d -m 0750 -o root -g nitu-mcp-ci /opt/nitu-mcp-ci /etc/nitu-mcp-ci
+          sudo install -d -m 0750 -o nitu-mcp-ci -g nitu-mcp-ci /var/lib/nitu-mcp-ci /var/log/nitu-mcp-ci
+          sudo cp /tmp/nitu-mcp-package/gateway.py /opt/nitu-mcp-ci/gateway.py
+          sudo cp /tmp/nitu-mcp-package/policy.json /etc/nitu-mcp-ci/policy.json
+          sudo cp /tmp/nitu-mcp-package/registry.json /etc/nitu-mcp-ci/registry.json
+          sudo chown root:nitu-mcp-ci /opt/nitu-mcp-ci/gateway.py /etc/nitu-mcp-ci/policy.json /etc/nitu-mcp-ci/registry.json
+          sudo chmod 0640 /etc/nitu-mcp-ci/policy.json /etc/nitu-mcp-ci/registry.json
+          sudo python3 -m venv /opt/nitu-mcp-ci/venv
+          sudo /opt/nitu-mcp-ci/venv/bin/pip install --disable-pip-version-check --no-input -r /tmp/nitu-mcp-package/requirements.txt
+          sudo /opt/nitu-mcp-ci/venv/bin/pip check
+          sudo chown -R root:nitu-mcp-ci /opt/nitu-mcp-ci
+          sudo chmod 0750 /opt/nitu-mcp-ci
+          cat >/tmp/nitu-mcp-ci.service <<'UNIT'
+          [Unit]
+          Description=Nitu MCP CI hardened service v0.2.4
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=simple
+          User=nitu-mcp-ci
+          Group=nitu-mcp-ci
+          WorkingDirectory=/opt/nitu-mcp-ci
+          Environment=NITU_MCP_ETC=/etc/nitu-mcp-ci
+          Environment=NITU_MCP_STATE=/var/lib/nitu-mcp-ci
+          Environment=PYTHONDONTWRITEBYTECODE=1
+          Environment=PYTHONUNBUFFERED=1
+          ExecStart=/opt/nitu-mcp-ci/venv/bin/uvicorn gateway:app --host 127.0.0.1 --port 18781 --workers 1 --no-access-log
+          Restart=no
+          UMask=0077
+          NoNewPrivileges=true
+          PrivateTmp=true
+          PrivateDevices=true
+          ProtectSystem=strict
+          ProtectHome=true
+          ProtectHostname=true
+          ProtectClock=true
+          ProtectKernelTunables=true
+          ProtectKernelModules=true
+          ProtectKernelLogs=true
+          ProtectControlGroups=true
+          ProtectProc=invisible
+          ProcSubset=pid
+          RestrictNamespaces=true
+          RestrictRealtime=true
+          RestrictSUIDSGID=true
+          LockPersonality=true
+          MemoryDenyWriteExecute=true
+          SystemCallArchitectures=native
+          CapabilityBoundingSet=
+          AmbientCapabilities=
+          RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+          ReadWritePaths=/var/lib/nitu-mcp-ci /var/log/nitu-mcp-ci
+          TasksMax=128
+          MemoryMax=768M
+          CPUQuota=80%
+          UNIT
+          sudo systemd-analyze verify /tmp/nitu-mcp-ci.service
+          sudo cp /tmp/nitu-mcp-ci.service /etc/systemd/system/nitu-mcp-ci.service
+          sudo systemctl daemon-reload
+          sudo systemctl start nitu-mcp-ci.service
+          ready=0
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:18781/healthz >/tmp/nitu-mcp-ci-systemd-health.json 2>/dev/null; then ready=1; break; fi
+            sleep 1
+          done
+          if [ "$ready" != 1 ]; then
+            sudo systemctl status nitu-mcp-ci.service --no-pager -l || true
+            sudo journalctl -u nitu-mcp-ci.service --no-pager -n 200 || true
+            exit 1
+          fi
+          cd /opt/nitu-mcp-ci
+          sudo -u nitu-mcp-ci NITU_MCP_ETC=/etc/nitu-mcp-ci NITU_MCP_STATE=/var/lib/nitu-mcp-ci \
+            /opt/nitu-mcp-ci/venv/bin/python - <<'PY'
+          import asyncio
+          from mcp import Client
+          expected={
+              'system_health','policy_current','upstream_status','whatsapp_recent_messages',
+              'fleet_list_vehicles','fleet_vehicle_live','fleet_recent_track',
+              'ads_list_accessible_customers','reports_status','oci_status'
+          }
+          async def main():
+              async with Client('http://127.0.0.1:18781/mcp', mode='auto') as c:
+                  r=await c.list_tools()
+                  names={t.name for t in r.tools}
+                  assert names==expected, names
+                  print('GITHUB_CI_HARDENED_SYSTEMD_MCP_PROTOCOL_PASS')
+          asyncio.run(main())
+          PY
+          sudo systemctl is-active --quiet nitu-mcp-ci.service
+          echo GITHUB_CI_HARDENED_SYSTEMD_SERVICE_PASS
