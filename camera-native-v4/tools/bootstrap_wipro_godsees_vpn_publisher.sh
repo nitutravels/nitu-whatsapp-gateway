@@ -14,7 +14,7 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export HOME=/root
 umask 077
 ROOT=/opt/nitu-camera-v3
-PIN=5bd2f57cb57b723bdab1ebae3ec6d2eea36693bc
+PIN=dd008b6366077a5e09ed04e418c0c7bed33b8628
 REPO=https://github.com/nitutravels/nitu-whatsapp-gateway.git
 [ -d "$ROOT" ] || { echo "Camera V3 is not installed at $ROOT" >&2; exit 2; }
 if [ ! -S /run/nitu-camera/godsees.sock ] && [ -x /usr/local/sbin/nitu-camera-deploy-v5 ]; then
