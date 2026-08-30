@@ -1,0 +1,178 @@
+name: Camera360 V7 Oracle Public Relay
+
+on:
+  push:
+    branches: [camera-v7-public-relay]
+    paths:
+      - 'camera-v7/oracle/**'
+      - '.github/workflows/camera-v7-oracle-relay.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING: 'True'
+
+jobs:
+  install_relay:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 25
+    steps:
+      - name: Checkout V7 relay source
+        uses: actions/checkout@v4
+        with:
+          ref: camera-v7-public-relay
+          persist-credentials: false
+
+      - name: Validate relay scripts
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash -n camera-v7/oracle/install_relay.sh
+          bash -n camera-v7/oracle/configure_wipro_peer.sh
+          grep -F 'ListenPort = $WG_PORT' camera-v7/oracle/install_relay.sh
+          grep -F 'PHONE_PORT=51828' camera-v7/oracle/install_relay.sh
+          grep -F 'WG_PORT=51829' camera-v7/oracle/install_relay.sh
+          echo CAMERA_V7_RELAY_SOURCE_PASS
+
+      - name: Configure OCI API credentials
+        shell: bash
+        env:
+          OCI_PRIVATE_KEY_PEM: ${{ secrets.OCI_PRIVATE_KEY }}
+          OCI_FINGERPRINT_VALUE: ${{ secrets.OCI_FINGERPRINT }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$HOME/.oci"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          value=os.environ.get('OCI_PRIVATE_KEY_PEM','').strip()
+          if len(value)>=2 and value[0]==value[-1] and value[0] in {'"', "'"}:
+              value=value[1:-1]
+          if '\\n' in value and '\n' not in value:
+              value=value.replace('\\r','').replace('\\n','\n')
+          Path.home().joinpath('.oci/oci_api_key.pem').write_text(value.replace('\r','').strip()+'\n',encoding='utf-8')
+          PY
+          chmod 600 "$HOME/.oci/oci_api_key.pem"
+          FINGERPRINT="$(printf '%s' "$OCI_FINGERPRINT_VALUE" | tr -d '[:space:]')"
+          cat > "$HOME/.oci/config" <<EOF
+          [DEFAULT]
+          user=${{ secrets.OCI_USER_OCID }}
+          fingerprint=$FINGERPRINT
+          tenancy=${{ secrets.OCI_TENANCY_OCID }}
+          region=${{ vars.OCI_REGION }}
+          key_file=$HOME/.oci/oci_api_key.pem
+          EOF
+          chmod 600 "$HOME/.oci/config"
+
+      - name: Install OCI CLI
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          pipx install oci-cli
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Resolve running Oracle gateway instance
+        shell: bash
+        env:
+          TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
+          CONFIGURED_COMPARTMENT_OCID: ${{ vars.OCI_COMPARTMENT_OCID }}
+        run: |
+          set -Eeuo pipefail
+          COMPARTMENT="$CONFIGURED_COMPARTMENT_OCID"
+          if [[ ! "$COMPARTMENT" =~ ^ocid1\.compartment\. ]]; then
+            COMPARTMENT="$(oci iam compartment list --compartment-id "$TENANCY_OCID" --compartment-id-in-subtree true --access-level ANY --all --output json | jq -r '[.data[] | select(.name=="NituWAGateway" and .["lifecycle-state"]=="ACTIVE") | .id][0] // empty')"
+          fi
+          [[ "$COMPARTMENT" =~ ^ocid1\.compartment\. ]] || { echo 'Unable to resolve NituWAGateway compartment' >&2; exit 2; }
+          INSTANCES="$(oci compute instance list --compartment-id "$COMPARTMENT" --lifecycle-state RUNNING --all --output json)"
+          INSTANCE="$(jq -r '[.data[] | select((.["display-name"]|test("NituTravelsWAHA|nitu-whatsapp-gateway";"i"))) ] | sort_by(.["time-created"]) | last | .id // empty' <<<"$INSTANCES")"
+          if [[ ! "$INSTANCE" =~ ^ocid1\.instance\. ]]; then
+            INSTANCE="$(jq -r '[.data[]] | sort_by(.["time-created"]) | last | .id // empty' <<<"$INSTANCES")"
+          fi
+          [[ "$INSTANCE" =~ ^ocid1\.instance\. ]] || { echo 'No running Oracle compute instance found' >&2; exit 2; }
+          VNIC_ID="$(oci compute vnic-attachment list --compartment-id "$COMPARTMENT" --instance-id "$INSTANCE" --all --output json | jq -r '[.data[] | select(.["lifecycle-state"]=="ATTACHED")][0].["vnic-id"] // empty')"
+          [[ "$VNIC_ID" =~ ^ocid1\.vnic\. ]] || { echo 'Primary VNIC not found' >&2; exit 2; }
+          VNIC_JSON="$(oci network vnic get --vnic-id "$VNIC_ID" --output json)"
+          SUBNET_ID="$(jq -r '.data.["subnet-id"]' <<<"$VNIC_JSON")"
+          VCN_ID="$(oci network subnet get --subnet-id "$SUBNET_ID" --query 'data."vcn-id"' --raw-output)"
+          PUBLIC_IP="$(jq -r '.data.["public-ip"] // empty' <<<"$VNIC_JSON")"
+          if [[ -z "$PUBLIC_IP" || "$PUBLIC_IP" == null ]]; then
+            PRIVATE_ID="$(oci network private-ip list --vnic-id "$VNIC_ID" --all --output json | jq -r '[.data[] | select(.["is-primary"]==true)][0].id // .data[0].id // empty')"
+            PUBLIC_IP="$(oci network public-ip list --scope REGION --compartment-id "$COMPARTMENT" --all --output json | jq -r --arg pid "$PRIVATE_ID" '[.data[] | select(.["assigned-entity-id"]==$pid)][0].["ip-address"] // empty')"
+          fi
+          [[ "$PUBLIC_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Public IP not resolved' >&2; exit 2; }
+          echo "OCI_V7_COMPARTMENT=$COMPARTMENT" >> "$GITHUB_ENV"
+          echo "OCI_V7_INSTANCE=$INSTANCE" >> "$GITHUB_ENV"
+          echo "OCI_V7_VNIC=$VNIC_ID" >> "$GITHUB_ENV"
+          echo "OCI_V7_VCN=$VCN_ID" >> "$GITHUB_ENV"
+          echo "OCI_V7_PUBLIC_IP=$PUBLIC_IP" >> "$GITHUB_ENV"
+          echo "CAMERA_V7_ORACLE_INSTANCE_PASS public_ip=$PUBLIC_IP"
+
+      - name: Create dedicated V7 NSG and expose only relay UDP ports
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          NSG_ID="$(oci network nsg list --compartment-id "$OCI_V7_COMPARTMENT" --vcn-id "$OCI_V7_VCN" --all --output json | jq -r '[.data[] | select(.["display-name"]=="nitu-camera-v7-relay")][0].id // empty')"
+          if [[ ! "$NSG_ID" =~ ^ocid1\.networksecuritygroup\. ]]; then
+            NSG_ID="$(oci network nsg create --compartment-id "$OCI_V7_COMPARTMENT" --vcn-id "$OCI_V7_VCN" --display-name nitu-camera-v7-relay --query data.id --raw-output)"
+          fi
+          RULES="$(oci network nsg rules list --nsg-id "$NSG_ID" --all --output json)"
+          if ! jq -e '.data[] | select(.direction=="INGRESS" and .protocol=="17") | (.["udp-options"] // .udpOptions // {}) | (.["destination-port-range"] // .destinationPortRange // {}) | select((.min // 0) <= 51828 and (.max // 0) >= 51829)' <<<"$RULES" >/dev/null; then
+            cat >/tmp/v7-rules.json <<'JSON'
+          [{"direction":"INGRESS","protocol":"17","source":"0.0.0.0/0","sourceType":"CIDR_BLOCK","isStateless":false,"udpOptions":{"destinationPortRange":{"min":51828,"max":51829}},"description":"Nitu Camera360 V7 public WireGuard relay"}]
+          JSON
+            oci network nsg rules add --nsg-id "$NSG_ID" --security-rules file:///tmp/v7-rules.json >/dev/null
+          fi
+          VNIC_JSON="$(oci network vnic get --vnic-id "$OCI_V7_VNIC" --output json)"
+          NSGS="$(jq -c --arg id "$NSG_ID" '((.data.["nsg-ids"] // []) + [$id]) | unique' <<<"$VNIC_JSON")"
+          oci network vnic update --vnic-id "$OCI_V7_VNIC" --nsg-ids "$NSGS" --force >/dev/null
+          echo "OCI_V7_NSG=$NSG_ID" >> "$GITHUB_ENV"
+          echo CAMERA_V7_ORACLE_NSG_PASS
+
+      - name: Install V7 WireGuard relay through Oracle Cloud Agent
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          SCRIPT="$(cat camera-v7/oracle/install_relay.sh)"
+          SHA="$(printf '%s' "$SCRIPT" | sha256sum | awk '{print $1}')"
+          jq -n --arg text "$SCRIPT" --arg sha "$SHA" '{source:{sourceType:"TEXT",text:$text,textSha256:$sha},output:{outputType:"TEXT"}}' >/tmp/v7-content.json
+          jq -n --arg id "$OCI_V7_INSTANCE" '{instanceId:$id}' >/tmp/v7-target.json
+          CMD_ID="$(oci instance-agent command create --compartment-id "$OCI_V7_COMPARTMENT" --content file:///tmp/v7-content.json --target file:///tmp/v7-target.json --timeout-in-seconds 900 --display-name 'Nitu Camera360 V7 relay install' --query data.id --raw-output)"
+          echo "OCI_V7_COMMAND=$CMD_ID" >> "$GITHUB_ENV"
+          for _ in $(seq 1 120); do
+            EXEC="$(oci instance-agent command-execution get --command-id "$CMD_ID" --instance-id "$OCI_V7_INSTANCE" --output json)"
+            STATE="$(jq -r '.data.["lifecycle-state"]' <<<"$EXEC")"
+            case "$STATE" in
+              SUCCEEDED|FAILED|TIMED_OUT|CANCELED) break ;;
+            esac
+            sleep 5
+          done
+          echo "$EXEC" >/tmp/v7-exec.json
+          OUT="$(jq -r '.data.content.text // ""' /tmp/v7-exec.json)"
+          printf '%s\n' "$OUT"
+          STATE="$(jq -r '.data.["lifecycle-state"]' /tmp/v7-exec.json)"
+          [ "$STATE" = SUCCEEDED ] || { jq -c '.data | {state:.["lifecycle-state"],content:.content}' /tmp/v7-exec.json; exit 1; }
+          grep -F 'NITU_CAMERA_V7_RELAY_INSTALL_PASS' <<<"$OUT"
+          PUB="$(sed -n 's/^NITU_CAMERA_V7_RELAY_PUBLIC_KEY=//p' <<<"$OUT" | tail -1)"
+          [ "${#PUB}" -eq 44 ] || { echo 'Relay public key missing from agent output' >&2; exit 1; }
+          echo "OCI_V7_RELAY_PUBLIC_KEY=$PUB" >> "$GITHUB_ENV"
+          echo CAMERA_V7_ORACLE_RELAY_PASS
+
+      - name: Publish non-secret relay handoff
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          echo "CAMERA_V7_RELAY_PUBLIC_IP=$OCI_V7_PUBLIC_IP"
+          echo "CAMERA_V7_RELAY_PHONE_PORT=51828"
+          echo "CAMERA_V7_RELAY_OUTER_WG_PORT=51829"
+          echo "CAMERA_V7_RELAY_PUBLIC_KEY=$OCI_V7_RELAY_PUBLIC_KEY"
+          {
+            echo '## Camera360 V7 Oracle relay ready'
+            echo "- Public IP: $OCI_V7_PUBLIC_IP"
+            echo '- Android endpoint port: UDP 51828'
+            echo '- Wipro outer WireGuard port: UDP 51829'
+            echo "- Relay public key: \`$OCI_V7_RELAY_PUBLIC_KEY\`"
+            echo '- Private key remains only on the Oracle instance.'
+          } >> "$GITHUB_STEP_SUMMARY"
