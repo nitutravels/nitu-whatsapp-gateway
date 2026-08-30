@@ -1,0 +1,119 @@
+name: Camera360 V7 WAHA Network Enable
+
+on:
+  push:
+    branches: [camera-v7-public-relay]
+    paths:
+      - '.github/workflows/camera-v7-waha-network.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING: 'True'
+
+jobs:
+  enable:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: camera-v7-public-relay
+          persist-credentials: false
+
+      - name: Configure OCI API credentials
+        shell: bash
+        env:
+          OCI_PRIVATE_KEY_PEM: ${{ secrets.OCI_PRIVATE_KEY }}
+          OCI_FINGERPRINT_VALUE: ${{ secrets.OCI_FINGERPRINT }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$HOME/.oci"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          value=os.environ.get('OCI_PRIVATE_KEY_PEM','').strip()
+          if len(value)>=2 and value[0]==value[-1] and value[0] in {'"', "'"}:
+              value=value[1:-1]
+          if '\\n' in value and '\n' not in value:
+              value=value.replace('\\r','').replace('\\n','\n')
+          Path.home().joinpath('.oci/oci_api_key.pem').write_text(value.replace('\r','').strip()+'\n',encoding='utf-8')
+          PY
+          chmod 600 "$HOME/.oci/oci_api_key.pem"
+          FINGERPRINT="$(printf '%s' "$OCI_FINGERPRINT_VALUE" | tr -d '[:space:]')"
+          cat > "$HOME/.oci/config" <<EOF
+          [DEFAULT]
+          user=${{ secrets.OCI_USER_OCID }}
+          fingerprint=$FINGERPRINT
+          tenancy=${{ secrets.OCI_TENANCY_OCID }}
+          region=${{ vars.OCI_REGION }}
+          key_file=$HOME/.oci/oci_api_key.pem
+          EOF
+          chmod 600 "$HOME/.oci/config"
+
+      - name: Install OCI CLI
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          pipx install oci-cli
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Resolve exact WAHA VNIC by public IP
+        shell: bash
+        env:
+          TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
+          CONFIGURED_COMPARTMENT_OCID: ${{ vars.OCI_COMPARTMENT_OCID }}
+        run: |
+          set -Eeuo pipefail
+          TARGET_IP='137.23.58.166'
+          COMPARTMENT="$CONFIGURED_COMPARTMENT_OCID"
+          if [[ ! "$COMPARTMENT" =~ ^ocid1\.compartment\. ]]; then
+            COMPARTMENT="$(oci iam compartment list --compartment-id "$TENANCY_OCID" --compartment-id-in-subtree true --access-level ANY --all --output json | jq -r '[.data[] | select(.name=="NituWAGateway" and .["lifecycle-state"]=="ACTIVE") | .id][0] // empty')"
+          fi
+          [[ "$COMPARTMENT" =~ ^ocid1\.compartment\. ]] || exit 2
+          INSTANCES="$(oci compute instance list --compartment-id "$COMPARTMENT" --all --output json)"
+          VNIC=''; INSTANCE=''
+          while IFS= read -r iid; do
+            [[ "$iid" =~ ^ocid1\.instance\. ]] || continue
+            ATTS="$(oci compute vnic-attachment list --compartment-id "$COMPARTMENT" --instance-id "$iid" --all --output json)"
+            while IFS= read -r vid; do
+              [[ "$vid" =~ ^ocid1\.vnic\. ]] || continue
+              J="$(oci network vnic get --vnic-id "$vid" --output json)"
+              IP="$(jq -r '.data.["public-ip"] // empty' <<<"$J")"
+              if [[ "$IP" == "$TARGET_IP" ]]; then VNIC="$vid"; INSTANCE="$iid"; break 2; fi
+            done < <(jq -r '.data[] | select(.["lifecycle-state"]=="ATTACHED") | .["vnic-id"]' <<<"$ATTS")
+          done < <(jq -r '.data[] | select(.["lifecycle-state"]!="TERMINATED") | .id' <<<"$INSTANCES")
+          [[ "$VNIC" =~ ^ocid1\.vnic\. ]] || { echo "WAHA_VNIC_NOT_FOUND_FOR_IP=$TARGET_IP" >&2; exit 3; }
+          VNIC_JSON="$(oci network vnic get --vnic-id "$VNIC" --output json)"
+          SUBNET="$(jq -r '.data.["subnet-id"]' <<<"$VNIC_JSON")"
+          VCN="$(oci network subnet get --subnet-id "$SUBNET" --query 'data."vcn-id"' --raw-output)"
+          echo "OCI_V7_WAHA_COMPARTMENT=$COMPARTMENT" >> "$GITHUB_ENV"
+          echo "OCI_V7_WAHA_INSTANCE=$INSTANCE" >> "$GITHUB_ENV"
+          echo "OCI_V7_WAHA_VNIC=$VNIC" >> "$GITHUB_ENV"
+          echo "OCI_V7_WAHA_VCN=$VCN" >> "$GITHUB_ENV"
+          echo "CAMERA_V7_WAHA_VNIC_PASS public_ip=$TARGET_IP"
+
+      - name: Enable relay forwarding on WAHA VNIC
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          NSG="$(oci network nsg list --compartment-id "$OCI_V7_WAHA_COMPARTMENT" --vcn-id "$OCI_V7_WAHA_VCN" --all --output json | jq -r '[.data[] | select(.["display-name"]=="nitu-camera-v7-waha")][0].id // empty')"
+          if [[ ! "$NSG" =~ ^ocid1\.networksecuritygroup\. ]]; then
+            NSG="$(oci network nsg create --compartment-id "$OCI_V7_WAHA_COMPARTMENT" --vcn-id "$OCI_V7_WAHA_VCN" --display-name nitu-camera-v7-waha --query data.id --raw-output)"
+          fi
+          RULES="$(oci network nsg rules list --nsg-id "$NSG" --all --output json)"
+          if ! jq -e '.data[] | select(.direction=="INGRESS" and .protocol=="17") | (.["udp-options"] // {}) | (.["destination-port-range"] // {}) | select((.min // 0) <= 51828 and (.max // 0) >= 51829)' <<<"$RULES" >/dev/null; then
+            cat >/tmp/v7-waha-rules.json <<'JSON'
+          [{"direction":"INGRESS","protocol":"17","source":"0.0.0.0/0","sourceType":"CIDR_BLOCK","isStateless":false,"udpOptions":{"destinationPortRange":{"min":51828,"max":51829}},"description":"Camera360 V7 WAHA relay"}]
+          JSON
+            oci network nsg rules add --nsg-id "$NSG" --security-rules file:///tmp/v7-waha-rules.json >/dev/null
+          fi
+          J="$(oci network vnic get --vnic-id "$OCI_V7_WAHA_VNIC" --output json)"
+          NSGS="$(jq -c --arg id "$NSG" '((.data.["nsg-ids"] // []) + [$id]) | unique' <<<"$J")"
+          oci network vnic update --vnic-id "$OCI_V7_WAHA_VNIC" --nsg-ids "$NSGS" --skip-source-dest-check true --force >/dev/null
+          VERIFY="$(oci network vnic get --vnic-id "$OCI_V7_WAHA_VNIC" --output json)"
+          jq -e --arg id "$NSG" '.data.["skip-source-dest-check"]==true and (.data.["nsg-ids"] | index($id) != null)' <<<"$VERIFY" >/dev/null
+          echo CAMERA_V7_WAHA_NETWORK_PASS
