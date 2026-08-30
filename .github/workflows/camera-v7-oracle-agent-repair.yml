@@ -1,0 +1,143 @@
+name: Camera360 V7 Oracle Agent Repair
+
+on:
+  push:
+    branches: [camera-v7-public-relay]
+    paths:
+      - '.github/workflows/camera-v7-oracle-agent-repair.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING: 'True'
+
+jobs:
+  repair_agent:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: camera-v7-public-relay
+          persist-credentials: false
+
+      - name: Configure OCI API credentials
+        shell: bash
+        env:
+          OCI_PRIVATE_KEY_PEM: ${{ secrets.OCI_PRIVATE_KEY }}
+          OCI_FINGERPRINT_VALUE: ${{ secrets.OCI_FINGERPRINT }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$HOME/.oci"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          value=os.environ.get('OCI_PRIVATE_KEY_PEM','').strip()
+          if len(value)>=2 and value[0]==value[-1] and value[0] in {'"', "'"}:
+              value=value[1:-1]
+          if '\\n' in value and '\n' not in value:
+              value=value.replace('\\r','').replace('\\n','\n')
+          Path.home().joinpath('.oci/oci_api_key.pem').write_text(value.replace('\r','').strip()+'\n',encoding='utf-8')
+          PY
+          chmod 600 "$HOME/.oci/oci_api_key.pem"
+          FINGERPRINT="$(printf '%s' "$OCI_FINGERPRINT_VALUE" | tr -d '[:space:]')"
+          cat > "$HOME/.oci/config" <<EOF
+          [DEFAULT]
+          user=${{ secrets.OCI_USER_OCID }}
+          fingerprint=$FINGERPRINT
+          tenancy=${{ secrets.OCI_TENANCY_OCID }}
+          region=${{ vars.OCI_REGION }}
+          key_file=$HOME/.oci/oci_api_key.pem
+          EOF
+          chmod 600 "$HOME/.oci/config"
+
+      - name: Install OCI CLI
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          pipx install oci-cli
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Resolve live Oracle instance
+        shell: bash
+        env:
+          TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
+          CONFIGURED_COMPARTMENT_OCID: ${{ vars.OCI_COMPARTMENT_OCID }}
+        run: |
+          set -Eeuo pipefail
+          COMPARTMENT="$CONFIGURED_COMPARTMENT_OCID"
+          if [[ ! "$COMPARTMENT" =~ ^ocid1\.compartment\. ]]; then
+            COMPARTMENT="$(oci iam compartment list --compartment-id "$TENANCY_OCID" --compartment-id-in-subtree true --access-level ANY --all --output json | jq -r '[.data[] | select(.name=="NituWAGateway" and .["lifecycle-state"]=="ACTIVE") | .id][0] // empty')"
+          fi
+          [[ "$COMPARTMENT" =~ ^ocid1\.compartment\. ]] || exit 2
+          INSTANCES="$(oci compute instance list --compartment-id "$COMPARTMENT" --lifecycle-state RUNNING --all --output json)"
+          INSTANCE="$(jq -r '[.data[] | select((.["display-name"]|test("NituTravelsWAHA|nitu-whatsapp-gateway";"i")))] | sort_by(.["time-created"]) | last | .id // empty' <<<"$INSTANCES")"
+          [[ "$INSTANCE" =~ ^ocid1\.instance\. ]] || INSTANCE="$(jq -r '[.data[]] | sort_by(.["time-created"]) | last | .id // empty' <<<"$INSTANCES")"
+          [[ "$INSTANCE" =~ ^ocid1\.instance\. ]] || exit 2
+          echo "OCI_V7_COMPARTMENT=$COMPARTMENT" >> "$GITHUB_ENV"
+          echo "OCI_V7_INSTANCE=$INSTANCE" >> "$GITHUB_ENV"
+          echo "CAMERA_V7_AGENT_TARGET_PASS instance=$INSTANCE"
+
+      - name: Enable Compute Instance Run Command plugin
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          echo 'Current agent config:'
+          oci compute instance get --instance-id "$OCI_V7_INSTANCE" --query 'data."agent-config"' --output json
+          cat >/tmp/agent-config.json <<'JSON'
+          {
+            "isManagementDisabled": false,
+            "areAllPluginsDisabled": false,
+            "pluginsConfig": [
+              {"name":"Compute Instance Run Command","desiredState":"ENABLED"}
+            ]
+          }
+          JSON
+          oci compute instance update --instance-id "$OCI_V7_INSTANCE" --agent-config file:///tmp/agent-config.json --force >/dev/null
+          echo CAMERA_V7_AGENT_ENABLE_REQUESTED
+
+      - name: Wait for Run Command plugin
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          STATUS=''
+          for _ in $(seq 1 48); do
+            PLUGINS="$(oci instance-agent plugin list --compartment-id "$OCI_V7_COMPARTMENT" --instanceagent-id "$OCI_V7_INSTANCE" --all --output json 2>/tmp/plugin.err || true)"
+            if [ -n "$PLUGINS" ]; then
+              STATUS="$(jq -r '[.data[] | select(.name=="Compute Instance Run Command")][0].status // empty' <<<"$PLUGINS")"
+              echo "RUN_COMMAND_PLUGIN_STATUS=${STATUS:-unknown}"
+              [ "$STATUS" = RUNNING ] && break
+            else
+              tail -n 2 /tmp/plugin.err || true
+            fi
+            sleep 5
+          done
+          [ "$STATUS" = RUNNING ] || { echo 'Run Command plugin did not reach RUNNING' >&2; exit 3; }
+          echo CAMERA_V7_AGENT_PLUGIN_RUNNING
+
+      - name: Probe agent execution and sudo boundary
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          PROBE='set -eu; echo CAMERA_V7_RUNCOMMAND_PROBE; id; if sudo -n true 2>/dev/null; then echo OCARUN_SUDO=yes; else echo OCARUN_SUDO=no; fi'
+          SHA="$(printf '%s' "$PROBE" | sha256sum | awk '{print $1}')"
+          jq -n --arg text "$PROBE" --arg sha "$SHA" '{source:{sourceType:"TEXT",text:$text,textSha256:$sha},output:{outputType:"TEXT"}}' >/tmp/probe-content.json
+          jq -n --arg id "$OCI_V7_INSTANCE" '{instanceId:$id}' >/tmp/probe-target.json
+          CMD="$(oci instance-agent command create --compartment-id "$OCI_V7_COMPARTMENT" --content file:///tmp/probe-content.json --target file:///tmp/probe-target.json --timeout-in-seconds 120 --display-name 'Nitu Camera360 V7 agent probe' --query data.id --raw-output)"
+          EXEC=''
+          for _ in $(seq 1 36); do
+            EXEC="$(oci instance-agent command-execution get --command-id "$CMD" --instance-id "$OCI_V7_INSTANCE" --output json)"
+            STATE="$(jq -r '.data.["lifecycle-state"]' <<<"$EXEC")"
+            echo "PROBE_STATE=$STATE"
+            case "$STATE" in SUCCEEDED|FAILED|TIMED_OUT|CANCELED) break;; esac
+            sleep 5
+          done
+          OUT="$(jq -r '.data.content.text // ""' <<<"$EXEC")"
+          printf '%s\n' "$OUT"
+          STATE="$(jq -r '.data.["lifecycle-state"]' <<<"$EXEC")"
+          [ "$STATE" = SUCCEEDED ]
+          grep -F CAMERA_V7_RUNCOMMAND_PROBE <<<"$OUT"
+          echo CAMERA_V7_RUNCOMMAND_EXECUTION_PASS
