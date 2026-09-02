@@ -1,0 +1,47 @@
+name: Nitu Voice Agent v1 Server Install
+run-name: Nitu Voice v1 server repair/install
+
+on:
+  workflow_dispatch:
+
+jobs:
+  install:
+    runs-on: wipro-production
+    timeout-minutes: 180
+    steps:
+      - name: Install repair and validate Wipro voice server
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(hostname)" = nitu-server
+          test "$(id -un)" = niturunner
+          test -x /opt/nitu-control/deploy/voice-v1/install-host.sh
+          test -s /opt/nitu-control/deploy/voice-v1/agent.py
+          bash -n /opt/nitu-control/deploy/voice-v1/install-host.sh
+          python3 -m py_compile /opt/nitu-control/deploy/voice-v1/agent.py
+          /opt/nitu-control/deploy/voice-v1/install-host.sh
+      - name: Independent persistence and foundation gate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo -n /usr/local/sbin/nitu-voice-server-status --verify
+          sudo -n systemctl is-enabled --quiet nitu-voice-agent.service
+          sudo -n systemctl is-enabled --quiet nitu-voice-asterisk.service
+          sudo -n systemctl is-active --quiet nitu-voice-agent.service
+          sudo -n systemctl is-active --quiet nitu-voice-asterisk.service
+          curl -fsS --max-time 5 http://127.0.0.1:8790/health | python3 -c 'import json,sys;d=json.load(sys.stdin);assert d.get("ok") is True and d.get("whisper_model")=="base"'
+          curl -fsS --max-time 5 http://127.0.0.1:8781/healthz | python3 -c 'import json,sys;d=json.load(sys.stdin);assert d.get("ok") is True and d.get("version")=="0.2.8"'
+          sudo -n /usr/local/sbin/nitu-control health
+          sudo -n systemctl is-active --quiet gitea
+          sudo -n systemctl is-active --quiet gitea-runner
+          python3 - <<'PY'
+          import json
+          p='/opt/nitu-control/voice-v1/state/installed.json'
+          d=json.load(open(p))
+          assert d.get('server_complete') is True, d
+          assert d.get('phone_pending') is True, d
+          assert d.get('runner') == 'wipro-production', d
+          print('NITU_VOICE_STATE_RECEIPT_PASS')
+          PY
+          echo NITU_WIPRO_VOICE_AGENT_V1_INSTALLATION_COMPLETE
+          echo NITU_WIPRO_VOICE_AGENT_V1_SERVER_COMPLETE_PHONE_PENDING
