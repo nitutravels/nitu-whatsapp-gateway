@@ -2,8 +2,10 @@
 set -Eeuo pipefail
 umask 077
 
-SOURCE_COMMIT='46864a33d72b21257d243b6978fdc788498b9e6b'
-RAW_BASE="https://raw.githubusercontent.com/nitutravels/nitu-whatsapp-gateway/${SOURCE_COMMIT}/deploy/gitea-voice-v1"
+VOICE_SOURCE_COMMIT='46864a33d72b21257d243b6978fdc788498b9e6b'
+CONTROL_COMMIT='bf67a0ac1a2c183a2f8193ade00a74e1550d6a01'
+VOICE_RAW_BASE="https://raw.githubusercontent.com/nitutravels/nitu-whatsapp-gateway/${VOICE_SOURCE_COMMIT}/deploy/gitea-voice-v1"
+CONTROL_RAW_BASE="https://raw.githubusercontent.com/nitutravels/nitu-whatsapp-gateway/${CONTROL_COMMIT}/deploy/gitea-voice-v1"
 GITEA='http://127.0.0.1:3001'
 OWNER='nituadmin'
 REPO='nitu-control'
@@ -41,18 +43,23 @@ sudo -n /usr/local/sbin/nitu-control health || die 'Nitu Control health failed'
 curl -fsS --max-time 5 http://127.0.0.1:8781/healthz | python3 -c 'import json,sys;d=json.load(sys.stdin);assert d.get("ok") is True;assert d.get("version")=="0.2.8";assert d.get("mode")=="read_write_guarded_rootless";assert d.get("protected_gps_ports")==[5023,15023,16023]'
 sudo -n /usr/local/sbin/nitu-control backup-now || die 'Nitu Control backup failed'
 
-log "download immutable deployment source commit $SOURCE_COMMIT"
-for f in install-host.sh agent.py gitea-workflow.yml; do
-  curl -fL --retry 4 --retry-delay 2 "$RAW_BASE/$f" -o "$TMP/$f"
+log "download immutable voice source $VOICE_SOURCE_COMMIT and control payload $CONTROL_COMMIT"
+for f in install-host.sh agent.py; do
+  curl -fL --retry 4 --retry-delay 2 "$VOICE_RAW_BASE/$f" -o "$TMP/$f"
+  test -s "$TMP/$f"
+done
+for f in gitea-workflow.yml root-helper.sh; do
+  curl -fL --retry 4 --retry-delay 2 "$CONTROL_RAW_BASE/$f" -o "$TMP/$f"
   test -s "$TMP/$f"
 done
 bash -n "$TMP/install-host.sh"
 python3 -m py_compile "$TMP/agent.py"
+bash -n "$TMP/root-helper.sh"
 python3 - "$TMP/gitea-workflow.yml" <<'PY'
 import sys
 p=sys.argv[1]
 s=open(p,encoding='utf-8').read()
-for needle in ('workflow_dispatch:', 'runs-on: wipro-production', '/opt/nitu-control/deploy/voice-v1/install-host.sh', 'NITU_WIPRO_VOICE_AGENT_V1_INSTALLATION_COMPLETE'):
+for needle in ('workflow_dispatch:', 'runs-on: wipro-production', 'nitu-voice-install-root install', 'nitu-voice-install-root verify', 'NITU_WIPRO_VOICE_AGENT_V1_INSTALLATION_COMPLETE'):
     assert needle in s, needle
 print('GITEA_VOICE_WORKFLOW_STATIC_VALIDATION_PASS')
 PY
@@ -61,6 +68,17 @@ log 'stage reviewed source under Nitu Control'
 sudo install -d -m 0755 -o niturunner -g niturunner "$TARGET"
 sudo install -m 0755 -o niturunner -g niturunner "$TMP/install-host.sh" "$TARGET/install-host.sh"
 sudo install -m 0644 -o niturunner -g niturunner "$TMP/agent.py" "$TARGET/agent.py"
+
+log 'install narrow root helper and exact Gitea sudo allowlist'
+sudo install -m 0755 -o root -g root "$TMP/root-helper.sh" /usr/local/sbin/nitu-voice-install-root
+printf '%s\n' "$VOICE_SOURCE_COMMIT" | sudo tee /etc/nitu-voice-source-commit >/dev/null
+sudo chmod 0644 /etc/nitu-voice-source-commit
+sudo tee /etc/sudoers.d/nitu-voice-gitea >/dev/null <<'SUDOERS'
+niturunner ALL=(root) NOPASSWD: /usr/local/sbin/nitu-voice-install-root install, /usr/local/sbin/nitu-voice-install-root repair, /usr/local/sbin/nitu-voice-install-root verify
+SUDOERS
+sudo chmod 0440 /etc/sudoers.d/nitu-voice-gitea
+sudo visudo -cf /etc/sudoers.d/nitu-voice-gitea >/dev/null
+sudo -u niturunner sudo -n -l | grep -q '/usr/local/sbin/nitu-voice-install-root' || die 'niturunner voice helper sudo rule did not activate'
 
 log 'create short-lived local Gitea token'
 TOKEN="$(sudo -n -u git env USER=git HOME=/home/git GITEA_WORK_DIR=/var/lib/gitea GITEA_CUSTOM=/var/lib/gitea/custom \
